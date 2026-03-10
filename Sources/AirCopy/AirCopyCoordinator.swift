@@ -267,6 +267,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func restoreHistoryItem(_ item: ClipboardHistoryItem) {
+        restoreHistoryItem(id: item.id)
+    }
+
+    func restoreHistoryItem(id: UUID) {
+        guard let item = clipboardHistory.first(where: { $0.id == id }) else {
+            statusText = "That history item is no longer available."
+            return
+        }
+
         pendingRemotePayload = nil
         lastKnownPayload = item.payload
         writePayloadToPasteboard(item.payload)

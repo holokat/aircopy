@@ -873,54 +873,52 @@ private struct HistoryItemCard: View {
 
                 Spacer(minLength: 0)
 
-                VStack(alignment: .trailing, spacing: 8) {
-                    Button {
-                        coordinator.restoreHistoryItem(item)
+                HStack(spacing: 6) {
+                    actionIconButton(
+                        systemImage: coordinator.recentlyCopiedHistoryItemID == item.id ? "checkmark" : "doc.on.doc",
+                        accessibilityLabel: "Copy this history item again"
+                    ) {
+                        coordinator.restoreHistoryItem(id: item.id)
+                    }
+
+                    actionIconButton(
+                        systemImage: item.isPinned ? "pin.fill" : "pin",
+                        accessibilityLabel: item.isPinned ? "Unpin this item" : "Pin this item"
+                    ) {
+                        coordinator.togglePin(for: item)
+                    }
+
+                    actionIconButton(
+                        systemImage: item.isFavorite ? "star.fill" : "star",
+                        accessibilityLabel: item.isFavorite ? "Unfavorite this item" : "Favorite this item"
+                    ) {
+                        coordinator.toggleFavorite(for: item)
+                    }
+
+                    Menu {
+                        if coordinator.trustedConnectedPeers.isEmpty {
+                            Text("No trusted connected Macs")
+                        } else {
+                            ForEach(coordinator.trustedConnectedPeers) { peer in
+                                Button(peer.displayName) {
+                                    coordinator.sendHistoryItem(item, to: peer.id)
+                                }
+                            }
+                        }
+
+                        if item.kind == .image {
+                            Button("Open Image") {
+                                coordinator.openImage(for: item)
+                            }
+                        }
                     } label: {
-                        Label("Copy Again", systemImage: coordinator.recentlyCopiedHistoryItemID == item.id ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "paperplane")
                     }
-                    .buttonStyle(.borderless)
-
-                    HStack(spacing: 6) {
-                        Button {
-                            coordinator.togglePin(for: item)
-                        } label: {
-                            Image(systemName: item.isPinned ? "pin.fill" : "pin")
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            coordinator.toggleFavorite(for: item)
-                        } label: {
-                            Image(systemName: item.isFavorite ? "star.fill" : "star")
-                        }
-                        .buttonStyle(.plain)
-
-                        Menu {
-                            if coordinator.trustedConnectedPeers.isEmpty {
-                                Text("No trusted connected Macs")
-                            } else {
-                                ForEach(coordinator.trustedConnectedPeers) { peer in
-                                    Button(peer.displayName) {
-                                        coordinator.sendHistoryItem(item, to: peer.id)
-                                    }
-                                }
-                            }
-
-                            if item.kind == .image {
-                                Button("Open Image") {
-                                    coordinator.openImage(for: item)
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "paperplane")
-                        }
-                        .menuStyle(.borderlessButton)
-                    }
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(AirCopyTheme.accent(for: colorScheme))
+                    .menuStyle(.borderlessButton)
+                    .accessibilityLabel("Send this history item")
                 }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AirCopyTheme.accent(for: colorScheme))
             }
 
             if !item.deviceReceipts.isEmpty {
@@ -980,6 +978,19 @@ private struct HistoryItemCard: View {
             .foregroundStyle(color)
             .frame(width: 64, height: 64)
             .background(AirCopyTheme.panelFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func actionIconButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private func receiptColor(for state: DeliveryState) -> Color {

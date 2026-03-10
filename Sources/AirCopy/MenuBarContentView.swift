@@ -41,7 +41,7 @@ struct MenuBarContentView: View {
 
         if let latest = coordinator.latestClipboardItem {
             Button {
-                coordinator.restoreHistoryItem(latest)
+                coordinator.restoreHistoryItem(id: latest.id)
             } label: {
                 menuRowLabel("Copy Latest Again", systemImage: "doc.on.doc")
             }
@@ -97,7 +97,7 @@ struct MenuBarContentView: View {
             } else {
                 ForEach(coordinator.clipboardHistory.prefix(8)) { item in
                     Button(item.title) {
-                        coordinator.restoreHistoryItem(item)
+                        coordinator.restoreHistoryItem(id: item.id)
                     }
                 }
             }
