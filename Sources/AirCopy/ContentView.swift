@@ -6,6 +6,7 @@ struct ContentView: View {
 
     @State private var searchText = ""
     @State private var historyFilter: HistoryFilter = .all
+    @State private var previewedHistoryItem: ClipboardHistoryItem?
 
     private var pendingPeers: [PeerDeviceState] {
         coordinator.peerDevices.filter { $0.trustState == .pending }
@@ -45,6 +46,10 @@ struct ContentView: View {
         .sheet(isPresented: $coordinator.settingsPresented) {
             AirCopySettingsView()
                 .environmentObject(coordinator)
+                .preferredColorScheme(coordinator.effectiveColorScheme)
+        }
+        .sheet(item: $previewedHistoryItem) { item in
+            HistoryPreviewSheet(item: item)
                 .preferredColorScheme(coordinator.effectiveColorScheme)
         }
     }
@@ -232,7 +237,9 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack(spacing: 10) {
                         ForEach(items) { item in
-                            HistoryItemCard(item: item)
+                            HistoryItemCard(item: item) {
+                                previewedHistoryItem = item
+                            }
                                 .environmentObject(coordinator)
                         }
                     }
@@ -830,6 +837,7 @@ private struct SettingsPeerRow: View {
 
 private struct HistoryItemCard: View {
     let item: ClipboardHistoryItem
+    let onPreview: (() -> Void)?
 
     @EnvironmentObject private var coordinator: AirCopyCoordinator
     @Environment(\.colorScheme) private var colorScheme
@@ -949,6 +957,19 @@ private struct HistoryItemCard: View {
 
     @ViewBuilder
     private var previewBlock: some View {
+        if isPreviewable, let onPreview {
+            Button(action: onPreview) {
+                previewThumbnail
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Preview \(item.title)")
+        } else {
+            previewThumbnail
+        }
+    }
+
+    @ViewBuilder
+    private var previewThumbnail: some View {
         if item.payload.isImageFileAttachment, let image = item.image {
             Image(nsImage: image)
                 .resizable()
@@ -990,6 +1011,10 @@ private struct HistoryItemCard: View {
         }
     }
 
+    private var isPreviewable: Bool {
+        item.kind == .text || item.kind == .code || item.kind == .image || item.payload.isImageFileAttachment
+    }
+
     private func previewIcon(symbol: String, color: Color) -> some View {
         Image(systemName: symbol)
             .font(.system(size: 16, weight: .semibold))
@@ -1023,6 +1048,88 @@ private struct HistoryItemCard: View {
             return AirCopyTheme.error(for: colorScheme)
         case .skipped:
             return AirCopyTheme.secondaryText(for: colorScheme)
+        }
+    }
+}
+
+private struct HistoryPreviewSheet: View {
+    let item: ClipboardHistoryItem
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title)
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    Text(item.detailText)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                }
+
+                Spacer()
+
+                Button("Done") {
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(AirCopyTheme.insetFill(for: colorScheme), in: Capsule())
+            }
+
+            previewContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .padding(20)
+        .frame(minWidth: 640, minHeight: 460)
+        .background(AirCopyTheme.background(for: colorScheme))
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        if item.kind == .image || item.payload.isImageFileAttachment, let image = item.image {
+            GeometryReader { proxy in
+                ScrollView([.horizontal, .vertical]) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: proxy.size.width, maxHeight: proxy.size.height)
+                        .padding(8)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AirCopyTheme.panelFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+        } else if item.kind == .text || item.kind == .code {
+            ScrollView {
+                Text(item.payload.text ?? item.previewText)
+                    .font(
+                        item.kind == .code
+                            ? .system(size: 13, weight: .medium, design: .monospaced)
+                            : .system(size: 14, weight: .regular)
+                    )
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(16)
+            }
+            .background(
+                item.kind == .code
+                    ? AirCopyTheme.codeBlockFill(for: colorScheme)
+                    : AirCopyTheme.panelFill(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+        } else {
+            Text("Preview is only available for images and text.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .background(AirCopyTheme.panelFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
 }
