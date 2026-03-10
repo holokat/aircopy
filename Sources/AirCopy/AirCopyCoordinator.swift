@@ -1080,6 +1080,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         sourceAppBundleID: String?,
         sourceAppName: String?
     ) -> ClipboardPayload? {
+        if let imagePayload = imagePayload(
+            from: pasteboard,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName
+        ) {
+            return imagePayload
+        }
+
         if let attachmentPayload = attachmentPayload(
             from: pasteboard,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
@@ -1087,14 +1095,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             sourceAppName: sourceAppName
         ) {
             return attachmentPayload
-        }
-
-        if let imageData = pngData(from: pasteboard), !imageData.isEmpty {
-            return ClipboardPayload(
-                imageData: imageData,
-                sourceAppBundleID: sourceAppBundleID,
-                sourceAppName: sourceAppName
-            )
         }
 
         if let urlPayload = urlPayload(
@@ -1131,6 +1131,38 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             sourceAppBundleID: sourceAppBundleID,
             sourceAppName: sourceAppName
         )
+    }
+
+    private static func imagePayload(
+        from pasteboard: NSPasteboard,
+        sourceAppBundleID: String?,
+        sourceAppName: String?
+    ) -> ClipboardPayload? {
+        guard containsDirectImagePayload(in: pasteboard),
+              let imageData = pngData(from: pasteboard),
+              !imageData.isEmpty else {
+            return nil
+        }
+
+        return ClipboardPayload(
+            imageData: imageData,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName
+        )
+    }
+
+    private static func containsDirectImagePayload(in pasteboard: NSPasteboard) -> Bool {
+        if let types = pasteboard.types,
+           types.contains(where: { $0 == .png || $0 == .tiff }) {
+            return true
+        }
+
+        if let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage],
+           !images.isEmpty {
+            return true
+        }
+
+        return false
     }
 
     private static func attachmentPayload(

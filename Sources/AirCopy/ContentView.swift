@@ -15,21 +15,31 @@ struct ContentView: View {
         coordinator.peerDevices.filter { $0.trustState == .trusted }
     }
 
+    private var alwaysSyncBinding: Binding<Bool> {
+        Binding(
+            get: { coordinator.syncEnabled && coordinator.temporarySyncUntil == nil },
+            set: { newValue in
+                if newValue {
+                    coordinator.syncEnabled = true
+                    coordinator.cancelTemporarySync()
+                } else {
+                    coordinator.syncEnabled = false
+                }
+            }
+        )
+    }
+
     var body: some View {
         ZStack {
             AirCopyTheme.background(for: colorScheme)
                 .ignoresSafeArea()
 
-            VStack(spacing: 12) {
-                header
+            HStack(alignment: .top, spacing: 12) {
+                deviceRail
+                    .frame(width: 308)
 
-                HStack(alignment: .top, spacing: 12) {
-                    deviceRail
-                        .frame(width: 308)
-
-                    historyPanel
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+                historyPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .padding(14)
         }
@@ -40,65 +50,10 @@ struct ContentView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 12) {
-                Group {
-                    if let icon = coordinator.appIconImage {
-                        Image(nsImage: icon)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                    } else {
-                        Image(systemName: coordinator.menuBarSymbolName)
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(AirCopyTheme.accent(for: colorScheme))
-                    }
-                }
-                .frame(width: 42, height: 42)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("AirCopy")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-
-                    Text(coordinator.statusText)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            summaryChip("Sync", value: coordinator.syncModeSummary)
-            summaryChip("Trusted Macs", value: "\(trustedPeers.count)")
-
-            Toggle("Sync", isOn: $coordinator.syncEnabled)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .tint(AirCopyTheme.buttonTint(for: colorScheme))
-
-            Button {
-                coordinator.showSettings()
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(AirCopyTheme.insetFill(for: colorScheme), in: Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .airCopyPanel(cornerRadius: 16)
-    }
-
     private var deviceRail: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                overviewCard
+                sidebarHeader
 
                 if !pendingPeers.isEmpty {
                     deviceSection(
@@ -133,26 +88,63 @@ struct ContentView: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    private var overviewCard: some View {
+    private var sidebarHeader: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Overview")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-                Text("Daily controls stay here. Detailed behavior lives in Settings.")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+            HStack(spacing: 12) {
+                Group {
+                    if let icon = coordinator.appIconImage {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        Image(systemName: coordinator.menuBarSymbolName)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.accent(for: colorScheme))
+                    }
+                }
+                .frame(width: 40, height: 40)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AirCopy")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    Text(coordinator.statusText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        .lineLimit(2)
+                }
             }
 
-            overviewRow(symbol: "desktopcomputer", title: "This Mac", value: coordinator.localDeviceName)
-            overviewRow(symbol: "clock.arrow.circlepath", title: "Sync Mode", value: coordinator.syncModeSummary)
-            overviewRow(symbol: "lock.shield", title: "Transport", value: "Encrypted")
-            overviewRow(symbol: "square.stack.3d.up.fill", title: "History", value: "\(coordinator.clipboardHistory.count) items")
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Always Sync")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    Text(coordinator.syncModeSummary)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                }
+
+                Spacer()
+
+                Toggle("Always Sync", isOn: alwaysSyncBinding)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .tint(AirCopyTheme.buttonTint(for: colorScheme))
+            }
+
+            HStack(spacing: 8) {
+                miniStat(title: "Trusted", value: "\(trustedPeers.count)")
+                miniStat(title: "History", value: "\(coordinator.clipboardHistory.count)")
+            }
 
             Button {
                 coordinator.showSettings()
             } label: {
-                Label("Open Settings", systemImage: "slider.horizontal.3")
+                Label("Settings", systemImage: "gearshape")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
                     .padding(.horizontal, 12)
@@ -162,9 +154,8 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .airCopyPanel(cornerRadius: 16)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
     }
 
     private var historyPanel: some View {
@@ -216,7 +207,7 @@ struct ContentView: View {
         .airCopyPanel(cornerRadius: 16)
     }
 
-    private func summaryChip(_ title: String, value: String) -> some View {
+    private func miniStat(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 10, weight: .bold))
@@ -225,9 +216,10 @@ struct ContentView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(AirCopyTheme.insetFill(for: colorScheme), in: Capsule())
+        .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func deviceSection<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
@@ -246,26 +238,6 @@ struct ContentView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .airCopyPanel(cornerRadius: 16)
-    }
-
-    private func overviewRow(symbol: String, title: String, value: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(AirCopyTheme.accent(for: colorScheme))
-                .frame(width: 16)
-
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-
-            Spacer()
-
-            Text(value)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                .lineLimit(1)
-        }
     }
 
     private func emptyPanelCopy(_ title: String, detail: String) -> some View {
@@ -413,7 +385,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .sync:
             return "arrow.triangle.2.circlepath"
         case .privacy:
-            return "hand.raised.shield"
+            return "lock.shield"
         case .devices:
             return "desktopcomputer"
         case .advanced:
@@ -485,25 +457,32 @@ private struct AirCopySettingsView: View {
     private var settingsSidebar: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(SettingsSection.allCases) { section in
+                let isSelected = selectedSection == section
+
                 Button {
                     selectedSection = section
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: section.symbolName)
+                            .foregroundStyle(
+                                isSelected
+                                    ? Color.white
+                                    : AirCopyTheme.accent(for: colorScheme)
+                            )
                             .frame(width: 16)
                         Text(section.title)
                             .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(
+                                isSelected
+                                    ? Color.white
+                                    : AirCopyTheme.primaryText(for: colorScheme)
+                            )
                         Spacer()
                     }
-                    .foregroundStyle(
-                        selectedSection == section
-                            ? Color.white
-                            : AirCopyTheme.primaryText(for: colorScheme)
-                    )
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
-                        selectedSection == section
+                        isSelected
                             ? AirCopyTheme.buttonTint(for: colorScheme)
                             : Color.clear,
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous)
