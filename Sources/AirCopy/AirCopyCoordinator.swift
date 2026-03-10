@@ -115,6 +115,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         "com.dashlane.dashlanephonefinal",
         "org.keepassxc.keepassxc"
     ]
+    private static let imageFileExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "heif",
+        "tif", "tiff", "bmp", "avif", "jxl", "icns"
+    ]
 
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser?
@@ -1445,6 +1449,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func shouldSuppressSync(for payload: ClipboardPayload) -> Bool {
+        if payload.isLikelyScreenshot {
+            return false
+        }
+
         guard let bundleID = payload.sourceAppBundleID else { return false }
 
         let lowercasedBundleID = bundleID.lowercased()
@@ -1537,6 +1545,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return imagePayload
         }
 
+        if let screenshotAttachmentPayload = screenshotImageAttachmentPayload(
+            from: pasteboard,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName,
+            screenshotStyleSettings: screenshotStyleSettings
+        ) {
+            return screenshotAttachmentPayload
+        }
+
         if let attachmentPayload = attachmentPayload(
             from: pasteboard,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
@@ -1600,9 +1617,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             sourceAppBundleID: sourceAppBundleID,
             sourceAppName: sourceAppName
         )
+        let isLikelyScreenshot = isLikelyScreenshotCapture(
+            pasteboard: pasteboard,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName
+        )
 
         return ClipboardPayload(
             imageData: processedImageData,
+            isLikelyScreenshot: isLikelyScreenshot,
             sourceAppBundleID: sourceAppBundleID,
             sourceAppName: sourceAppName
         )
@@ -1610,7 +1633,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private static func containsDirectImagePayload(in pasteboard: NSPasteboard) -> Bool {
         if let types = pasteboard.types,
-           types.contains(where: { $0 == .png || $0 == .tiff }) {
+           types.contains(where: { pasteboardTypeLooksLikeImage($0) }) {
             return true
         }
 
@@ -1620,6 +1643,100 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return false
+    }
+
+    private static func screenshotImageAttachmentPayload(
+        from pasteboard: NSPasteboard,
+        sourceAppBundleID: String?,
+        sourceAppName: String?,
+        screenshotStyleSettings: ScreenshotStyleSettings
+    ) -> ClipboardPayload? {
+        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] else { return nil }
+        let fileURLs = urls.filter(\.isFileURL)
+        guard fileURLs.count == 1, let fileURL = fileURLs.first else { return nil }
+        guard looksLikeScreenshotFile(fileURL) || isLikelyScreenshotCapture(
+            pasteboard: pasteboard,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName
+        ) else {
+            return nil
+        }
+
+        guard let values = try? fileURL.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .contentTypeKey,
+            .fileSizeKey
+        ]),
+        values.isDirectory != true else {
+            return nil
+        }
+
+        let isImageLike = values.contentType?.conforms(to: .image) == true
+            || Self.imageFileExtensions.contains(fileURL.pathExtension.lowercased())
+        guard isImageLike, let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else {
+            return nil
+        }
+
+        let processedImageData = ScreenshotStyleRenderer.styledImageData(
+            from: imageData,
+            settings: screenshotStyleSettings,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName
+        )
+
+        return ClipboardPayload(
+            imageData: processedImageData,
+            isLikelyScreenshot: true,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName
+        )
+    }
+
+    private static func pasteboardTypeLooksLikeImage(_ type: NSPasteboard.PasteboardType) -> Bool {
+        if type == .png || type == .tiff {
+            return true
+        }
+
+        guard let contentType = UTType(type.rawValue) else { return false }
+        return contentType.conforms(to: .image)
+    }
+
+    private static func isLikelyScreenshotCapture(
+        pasteboard: NSPasteboard,
+        sourceAppBundleID: String?,
+        sourceAppName: String?
+    ) -> Bool {
+        let lowercasedBundleID = sourceAppBundleID?.lowercased() ?? ""
+        let lowercasedName = sourceAppName?.lowercased() ?? ""
+
+        if lowercasedBundleID.contains("screenshot")
+            || lowercasedBundleID.contains("screencapture")
+            || lowercasedName.contains("screenshot")
+            || lowercasedName.contains("screen capture") {
+            return true
+        }
+
+        if let types = pasteboard.types,
+           types.contains(where: { type in
+               let value = type.rawValue.lowercased()
+               return value.contains("screenshot") || value.contains("screencapture")
+           }) {
+            return true
+        }
+
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+           urls.contains(where: { looksLikeScreenshotFile($0) }) {
+            return true
+        }
+
+        return false
+    }
+
+    private static func looksLikeScreenshotFile(_ fileURL: URL) -> Bool {
+        let candidate = "\(fileURL.lastPathComponent) \(fileURL.path)".lowercased()
+        return candidate.contains("screenshot")
+            || candidate.contains("screen shot")
+            || candidate.contains("screencapture")
     }
 
     private static func attachmentPayload(
@@ -1752,6 +1869,16 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static func pngData(from pasteboard: NSPasteboard) -> Data? {
         if let pngData = pasteboard.data(forType: .png) {
             return pngData
+        }
+
+        if let types = pasteboard.types {
+            for type in types where pasteboardTypeLooksLikeImage(type) {
+                if let directData = pasteboard.data(forType: type),
+                   let image = NSImage(data: directData),
+                   let pngData = pngData(from: image) {
+                    return pngData
+                }
+            }
         }
 
         if let tiffData = pasteboard.data(forType: .tiff),
