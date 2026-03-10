@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
@@ -21,6 +21,7 @@
   <body>
     <div class="ambient ambient-left" aria-hidden="true"></div>
     <div class="ambient ambient-right" aria-hidden="true"></div>
+    <div class="ambient ambient-bottom" aria-hidden="true"></div>
 
     <header class="topbar load-in">
       <div class="topbar-inner">
@@ -28,11 +29,13 @@
           <img src="./assets/aircopy-logo.png" alt="" />
           <span>AirCopy</span>
         </a>
+
         <nav class="topnav" aria-label="Primary">
-          <a href="#experience">Experience</a>
+          <a href="#experience">Overview</a>
           <a href="#how-it-works">Setup</a>
           <a href="#privacy">Privacy</a>
         </nav>
+
         <a class="button button-nav" href="./downloads/AirCopy-macOS.zip" download>
           Download
         </a>
@@ -43,150 +46,122 @@
       <main id="top">
         <section class="hero">
           <div class="hero-copy load-in">
-            <p class="eyebrow">Peer-to-peer clipboard sync for macOS</p>
-            <h1>Install it on your Macs. Turn on Sync. Copy anywhere.</h1>
+            <p class="eyebrow">AirCopy for macOS</p>
+            <h1>A tidier clipboard for every Mac you use.</h1>
             <p class="hero-text">
-              AirCopy keeps text, screenshots, and recent clips moving between
-              the Macs you actually use. It feels light, native, and ready the
-              moment you need to paste.
+              Install AirCopy on each Mac, enable Sync, and move text,
+              screenshots, and recent clips across your desk without relying on
+              the same Apple account.
             </p>
+
             <div class="hero-actions">
               <a class="button button-primary" href="./downloads/AirCopy-macOS.zip" download>
                 Download for macOS
               </a>
               <a class="button button-secondary" href="#how-it-works">
-                How it works
+                See setup
               </a>
             </div>
-            <div class="hero-pills" aria-label="Highlights">
-              <span class="info-pill">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    d="M8 6.75h8a3.25 3.25 0 0 1 3.25 3.25v5A3.25 3.25 0 0 1 16 18.25H8A3.25 3.25 0 0 1 4.75 15v-5A3.25 3.25 0 0 1 8 6.75Z"
-                  />
-                  <path d="M9.5 4.75h5" />
-                  <path d="M10 15.25 14.25 11 10 6.75" />
-                </svg>
-                No shared Apple account
-              </span>
-              <span class="info-pill">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M5.75 7.25h12.5v9.5H5.75z" />
-                  <path d="M9 16.75h6" />
-                  <path d="m8.5 10.25 2 2 5-5" />
-                </svg>
-                Text and images
-              </span>
-              <span class="info-pill">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M8 6.75h8a3.25 3.25 0 0 1 3.25 3.25v5A3.25 3.25 0 0 1 16 18.25H8A3.25 3.25 0 0 1 4.75 15v-5A3.25 3.25 0 0 1 8 6.75Z" />
-                  <path d="M8.75 11.25h6.5" />
-                  <path d="M8.75 14.25h4.5" />
-                </svg>
-                Recent clip history
-              </span>
+
+            <div class="hero-notes" aria-label="Highlights">
+              <span>Direct zip download</span>
+              <span>Text and image sync</span>
+              <span>Recent clip history</span>
             </div>
           </div>
 
-          <div class="hero-stage load-in" aria-hidden="true">
-            <div class="hero-glow hero-glow-one"></div>
-            <div class="hero-glow hero-glow-two"></div>
-
-            <div class="app-stage">
-              <div class="window-chrome">
-                <span></span>
-                <span></span>
-                <span></span>
-                <p>AirCopy</p>
+          <div class="hero-board load-in" aria-hidden="true">
+            <div class="board-shell">
+              <div class="logo-disc">
+                <img src="./assets/aircopy-logo.png" alt="" />
+                <span>Sync On</span>
               </div>
-              <div class="app-grid">
-                <aside class="app-sidebar">
-                  <div class="sidebar-block">
-                    <p>Nearby Macs</p>
-                    <strong>K's MacBook Air</strong>
-                    <strong>K's Studio</strong>
-                  </div>
-                  <div class="sidebar-block">
-                    <p>State</p>
-                    <strong>Sync enabled</strong>
-                    <strong>3 recent clips</strong>
-                  </div>
-                  <div class="sidebar-badge">
-                    <span></span>
-                    Ready to paste
-                  </div>
-                </aside>
 
-                <div class="app-main">
-                  <div class="main-status">
-                    <span class="sync-chip">Sync On</span>
-                    <span class="history-chip">Nearby and connected</span>
-                  </div>
-
-                  <article class="clip-card">
-                    <div class="clip-icon clip-icon-text">Aa</div>
-                    <div class="clip-copy">
-                      <strong>Install AirCopy on each Mac you use.</strong>
-                      <p>Copy on one machine and the other is ready to paste.</p>
-                    </div>
-                    <span class="status-dot"></span>
-                  </article>
-
-                  <article class="clip-card clip-card-image">
-                    <div class="clip-icon clip-icon-image">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M5.75 6.75h12.5v10.5H5.75z" />
-                        <path d="m8.75 14.25 2.5-2.5 2.5 2.5 2-2 1.5 1.5" />
-                        <path d="M9.25 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
-                      </svg>
-                    </div>
-                    <div class="clip-copy">
-                      <strong>Screenshot.png</strong>
-                      <p>Images stay in sync too, with recent history built in.</p>
-                    </div>
-                    <span class="copy-chip">Copied</span>
-                  </article>
-
-                  <div class="history-row">
-                    <div class="history-pill">Clipboard history</div>
-                    <div class="history-pill">Nearby discovery</div>
-                    <div class="history-pill">Menu bar controls</div>
-                  </div>
+              <article class="board-card board-card-top-left">
+                <div class="board-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4.75 8h5.5v5.5h-5.5z" />
+                    <path d="M13.75 10.5h5.5V16h-5.5z" />
+                    <path d="m9.5 15.25 1.75 1.75L15 13.25" />
+                  </svg>
                 </div>
-              </div>
+                <p>Nearby Macs</p>
+                <strong>MacBook Air</strong>
+                <strong>Mac Studio</strong>
+              </article>
+
+              <article class="board-card board-card-top-right">
+                <div class="board-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7.25 6.75h9.5A2.5 2.5 0 0 1 19.25 9.25v5.5a2.5 2.5 0 0 1-2.5 2.5h-9.5a2.5 2.5 0 0 1-2.5-2.5v-5.5a2.5 2.5 0 0 1 2.5-2.5Z" />
+                    <path d="M8.75 11.25h6.5" />
+                    <path d="M8.75 14.25h4.5" />
+                  </svg>
+                </div>
+                <p>Recent Clips</p>
+                <strong>Three items ready</strong>
+                <span>Restore any clip instantly</span>
+              </article>
+
+              <article class="board-card board-card-bottom-left">
+                <div class="board-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 12a6 6 0 0 1 10.25-4.25" />
+                    <path d="M18 12a6 6 0 0 1-10.25 4.25" />
+                    <path d="m14.75 5.75 1.75 2.5 3-1" />
+                    <path d="m9.25 18.25-1.75-2.5-3 1" />
+                  </svg>
+                </div>
+                <p>One switch</p>
+                <strong>Enable Sync</strong>
+                <span>Leave it on and keep moving</span>
+              </article>
+
+              <article class="board-card board-card-bottom-right">
+                <div class="board-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5.75 6.75h12.5v10.5H5.75z" />
+                    <path d="m8.75 14.25 2.5-2.5 2.5 2.5 2-2 1.5 1.5" />
+                    <path d="M9.25 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
+                  </svg>
+                </div>
+                <p>Clipboard</p>
+                <strong>Text and images</strong>
+                <span>Ready to paste on the next Mac</span>
+              </article>
             </div>
 
-            <div class="floating-card floating-card-left">
-              <span class="floating-label">Install once</span>
-              <strong>Drop it on every Mac you use.</strong>
-            </div>
-
-            <div class="floating-card floating-card-right">
-              <span class="floating-label">Fast setup</span>
-              <strong>Open AirCopy and enable Sync.</strong>
+            <div class="board-ribbon">
+              <span>No shared Apple account</span>
+              <span>Local peer sync</span>
+              <span>Menu bar access</span>
             </div>
           </div>
         </section>
 
-        <section class="stat-strip reveal">
+        <section class="summary-strip reveal">
           <article>
-            <strong>2-minute setup</strong>
-            <span>Install, allow local access, and enable Sync.</span>
+            <strong>Install on each Mac</strong>
+            <span>Open AirCopy on the machines you want to use.</span>
           </article>
           <article>
-            <strong>Text + image support</strong>
-            <span>Move copied text, screenshots, and other images.</span>
+            <strong>Turn on Sync</strong>
+            <span>Approve local network access when macOS asks.</span>
           </article>
           <article>
-            <strong>Recent history</strong>
-            <span>Restore the clips you just used without digging.</span>
+            <strong>Copy anywhere</strong>
+            <span>Paste text, screenshots, and recent clips on another Mac.</span>
           </article>
         </section>
 
         <section class="section" id="experience">
           <div class="section-heading reveal">
-            <p class="eyebrow">Designed for flow</p>
-            <h2>Everything you need to move between Macs without friction.</h2>
+            <p class="eyebrow">Overview</p>
+            <h2>Small details, local behavior, less friction.</h2>
+            <p>
+              AirCopy stays focused on the actual job: moving clipboard content
+              between nearby Macs you already use.
+            </p>
           </div>
 
           <div class="feature-grid">
@@ -198,43 +173,32 @@
                   <path d="m9.5 15.25 1.75 1.75L15 13.25" />
                 </svg>
               </div>
-              <h3>Nearby Mac discovery</h3>
-              <p>
-                Install AirCopy on the Macs you want to use and it finds them
-                locally without extra setup.
-              </p>
+              <h3>Nearby discovery</h3>
+              <p>Install it on your Macs and let local discovery handle the rest.</p>
             </article>
 
             <article class="feature-card reveal" style="--delay: 0.08s">
               <div class="feature-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M6 12a6 6 0 0 1 10.25-4.25" />
-                  <path d="M18 12a6 6 0 0 1-10.25 4.25" />
-                  <path d="m14.75 5.75 1.75 2.5 3-1" />
-                  <path d="m9.25 18.25-1.75-2.5-3 1" />
+                  <path d="M7.25 6.75h9.5A2.5 2.5 0 0 1 19.25 9.25v5.5a2.5 2.5 0 0 1-2.5 2.5h-9.5a2.5 2.5 0 0 1-2.5-2.5v-5.5a2.5 2.5 0 0 1 2.5-2.5Z" />
+                  <path d="M8.75 11.25h6.5" />
+                  <path d="M8.75 14.25h4.5" />
                 </svg>
               </div>
-              <h3>One clear Sync control</h3>
-              <p>
-                Turn Sync on and leave it there. AirCopy keeps the clipboard in
-                step while staying out of the way.
-              </p>
+              <h3>Recent history</h3>
+              <p>Restore the last few clips without recopying or hunting around.</p>
             </article>
 
             <article class="feature-card reveal" style="--delay: 0.14s">
               <div class="feature-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M6 7.25h12" />
-                  <path d="M6 12h12" />
-                  <path d="M6 16.75h7.5" />
-                  <path d="M4.75 5.75h14.5v12.5H4.75z" />
+                  <path d="M5.75 6.75h12.5v10.5H5.75z" />
+                  <path d="m8.75 14.25 2.5-2.5 2.5 2.5 2-2 1.5 1.5" />
+                  <path d="M9.25 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
                 </svg>
               </div>
-              <h3>Recent clipboard history</h3>
-              <p>
-                Re-open the app or the menu bar extra and restore the clip you
-                just copied without starting over.
-              </p>
+              <h3>Images included</h3>
+              <p>Screenshots and copied images move with the same flow as text.</p>
             </article>
 
             <article class="feature-card reveal" style="--delay: 0.2s">
@@ -245,111 +209,66 @@
                 </svg>
               </div>
               <h3>Private by design</h3>
-              <p>
-                AirCopy is built for nearby machines you control, with direct
-                peer sync instead of a cloud clipboard.
-              </p>
+              <p>Built for local devices you control instead of a cloud clipboard.</p>
             </article>
           </div>
         </section>
 
-        <section class="section section-soft" id="how-it-works">
+        <section class="section" id="how-it-works">
           <div class="section-heading reveal">
-            <p class="eyebrow">Simple setup</p>
-            <h2>Install it, enable Sync, and keep moving.</h2>
+            <p class="eyebrow">Setup</p>
+            <h2>Three small steps.</h2>
+            <p>Install it, enable Sync, and keep AirCopy open on the Macs you want connected.</p>
           </div>
 
-          <div class="steps-grid">
-            <article class="step-card reveal" style="--delay: 0.02s">
+          <div class="setup-grid">
+            <article class="setup-card reveal" style="--delay: 0.02s">
               <span>01</span>
               <h3>Install AirCopy</h3>
-              <p>Put AirCopy on each Mac you want to include.</p>
+              <p>Put it on each Mac you want in your clipboard loop.</p>
             </article>
 
-            <article class="step-card reveal" style="--delay: 0.1s">
+            <article class="setup-card reveal" style="--delay: 0.08s">
               <span>02</span>
               <h3>Enable Sync</h3>
-              <p>Open the app, turn on Sync, and approve local network access.</p>
+              <p>Open the app and approve local network access when prompted.</p>
             </article>
 
-            <article class="step-card reveal" style="--delay: 0.18s">
+            <article class="setup-card reveal" style="--delay: 0.14s">
               <span>03</span>
               <h3>Copy and paste</h3>
-              <p>Copy text or images on one Mac and paste them on the other.</p>
+              <p>Copy on one Mac and paste on another, including images.</p>
             </article>
           </div>
         </section>
 
-        <section class="section">
-          <div class="showcase reveal">
-            <div class="showcase-copy">
-              <p class="eyebrow">Looks native</p>
-              <h2>A menu bar helper when you need speed, a full window when you need context.</h2>
-              <p>
-                AirCopy gives you quick access to Sync, nearby device status,
-                and recent clipboard items without burying the simple part:
-                install it everywhere you work and leave it running.
-              </p>
+        <section class="section panel-grid" id="privacy">
+          <article class="panel panel-soft reveal">
+            <p class="eyebrow">Privacy</p>
+            <h2>Your clipboard stays between your Macs.</h2>
+            <p>
+              AirCopy focuses on local discovery and direct sync. It is meant
+              for nearby Macs you control, not account-bound cloud sharing.
+            </p>
+            <div class="panel-tags">
+              <span>Local discovery</span>
+              <span>Direct peer sync</span>
             </div>
+          </article>
 
-            <div class="showcase-stack">
-              <article class="mini-panel">
-                <p>Menu Bar</p>
-                <strong>Clipboard Sync On</strong>
-                <span>Quick access to recent clips and status.</span>
-              </article>
-              <article class="mini-panel mini-panel-accent">
-                <p>Main Window</p>
-                <strong>Connected Macs and recent history in one place.</strong>
-                <span>Open it when you want to restore a recent clip or check peers.</span>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section class="section" id="privacy">
-          <div class="privacy-panel reveal">
-            <div class="privacy-copy">
-              <p class="eyebrow">Privacy</p>
-              <h2>Your clipboard stays between your Macs.</h2>
-              <p>
-                AirCopy is meant for nearby Macs you control. It focuses on
-                direct peer sync and local discovery, not cloud storage or
-                account lock-in.
-              </p>
-            </div>
-
-            <div class="privacy-points">
-              <article class="privacy-point">
-                <strong>Local discovery</strong>
-                <span>Find nearby Macs without requiring a shared Apple account.</span>
-              </article>
-              <article class="privacy-point">
-                <strong>Direct sync</strong>
-                <span>Clipboard items move between connected devices, not through a remote dashboard.</span>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section class="cta reveal">
-          <div class="cta-copy">
+          <article class="panel panel-strong reveal" style="--delay: 0.06s">
             <p class="eyebrow">Download</p>
             <h2>Ready to use AirCopy?</h2>
-            <p>
-              Download the zip, install AirCopy on the Macs you want to use,
-              and enable Sync.
-            </p>
-          </div>
-
-          <div class="cta-actions">
-            <a class="button button-primary" href="./downloads/AirCopy-macOS.zip" download>
-              Download AirCopy
-            </a>
-            <a class="button button-secondary" href="#how-it-works">
-              Setup guide
-            </a>
-          </div>
+            <p>Download the zip, install it on each Mac you want to use, then turn on Sync.</p>
+            <div class="panel-actions">
+              <a class="button button-primary" href="./downloads/AirCopy-macOS.zip" download>
+                Download AirCopy
+              </a>
+              <a class="button button-secondary" href="#how-it-works">
+                Setup guide
+              </a>
+            </div>
+          </article>
         </section>
       </main>
 
