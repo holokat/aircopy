@@ -7,6 +7,14 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var historyFilter: HistoryFilter = .all
 
+    private var pendingPeers: [PeerDeviceState] {
+        coordinator.peerDevices.filter { $0.trustState == .pending }
+    }
+
+    private var trustedPeers: [PeerDeviceState] {
+        coordinator.peerDevices.filter { $0.trustState == .trusted }
+    }
+
     var body: some View {
         ZStack {
             AirCopyTheme.background(for: colorScheme)
@@ -16,8 +24,8 @@ struct ContentView: View {
                 header
 
                 HStack(alignment: .top, spacing: 12) {
-                    sidebar
-                        .frame(width: 320)
+                    deviceRail
+                        .frame(width: 308)
 
                     historyPanel
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -25,10 +33,15 @@ struct ContentView: View {
             }
             .padding(14)
         }
+        .sheet(isPresented: $coordinator.settingsPresented) {
+            AirCopySettingsView()
+                .environmentObject(coordinator)
+                .preferredColorScheme(coordinator.effectiveColorScheme)
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             HStack(spacing: 12) {
                 Group {
                     if let icon = coordinator.appIconImage {
@@ -57,177 +70,97 @@ struct ContentView: View {
 
             Spacer()
 
-            statusPill("Sync", value: coordinator.syncModeSummary, emphasized: coordinator.syncEnabled)
-            statusPill("Peers", value: "\(coordinator.connectedPeerCount) trusted", emphasized: coordinator.connectedPeerCount > 0)
-            statusPill("Images", value: coordinator.imageSyncEnabled ? "On" : "Paused", emphasized: coordinator.imageSyncEnabled)
+            summaryChip("Sync", value: coordinator.syncModeSummary)
+            summaryChip("Trusted Macs", value: "\(trustedPeers.count)")
 
             Toggle("Sync", isOn: $coordinator.syncEnabled)
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .tint(AirCopyTheme.buttonTint(for: colorScheme))
 
-            Toggle("Images", isOn: $coordinator.imageSyncEnabled)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .tint(AirCopyTheme.highlight(for: colorScheme))
-                .help("Pause or resume image sync.")
-
-            secondaryHeaderButton(title: "10m", systemImage: "timer") {
-                coordinator.startTemporarySync()
+            Button {
+                coordinator.showSettings()
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(AirCopyTheme.insetFill(for: colorScheme), in: Capsule())
             }
-            .help("Enable sync for 10 minutes.")
-
-            if coordinator.temporarySyncUntil != nil {
-                secondaryHeaderButton(title: "Cancel", systemImage: "pause.circle") {
-                    coordinator.cancelTemporarySync()
-                }
-                .help("Cancel temporary sync.")
-            }
-
-            appearanceSwitcher
-
-            headerActionButton(title: "Clear This Mac", systemImage: "trash") {
-                coordinator.clearClipboard()
-            }
-
-            headerActionButton(title: "Clear History", systemImage: "xmark.bin") {
-                coordinator.clearHistory()
-            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .airCopyPanel(cornerRadius: 16)
     }
 
-    private var appearanceSwitcher: some View {
-        HStack(spacing: 6) {
-            ForEach(AppearancePreference.allCases) { preference in
-                Button {
-                    coordinator.appearancePreference = preference
-                } label: {
-                    Image(systemName: appearanceSymbol(for: preference))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(
-                            coordinator.appearancePreference == preference
-                                ? Color.white
-                                : AirCopyTheme.primaryText(for: colorScheme)
-                        )
-                        .frame(width: 16, height: 16)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 10)
-                        .background(
-                            coordinator.appearancePreference == preference
-                                ? AirCopyTheme.buttonTint(for: colorScheme)
-                                : AirCopyTheme.insetFill(for: colorScheme),
-                            in: Capsule()
-                        )
-                }
-                .help(preference.title)
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background(AirCopyTheme.insetFill(for: colorScheme), in: Capsule())
-    }
-
-    private var sidebar: some View {
+    private var deviceRail: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                syncPanel
-                devicesPanel
-                privacyPanel
+                overviewCard
+
+                if !pendingPeers.isEmpty {
+                    deviceSection(
+                        title: "Pending Approval",
+                        subtitle: "Approve nearby Macs before they can sync."
+                    ) {
+                        ForEach(pendingPeers) { peer in
+                            MainPeerCard(peer: peer)
+                                .environmentObject(coordinator)
+                        }
+                    }
+                }
+
+                deviceSection(
+                    title: "Your Macs",
+                    subtitle: "Connected and trusted devices for direct sending."
+                ) {
+                    if trustedPeers.isEmpty {
+                        emptyPanelCopy(
+                            "No trusted Macs yet",
+                            detail: "Open AirCopy on your other Macs, then approve them here."
+                        )
+                    } else {
+                        ForEach(trustedPeers) { peer in
+                            MainPeerCard(peer: peer)
+                                .environmentObject(coordinator)
+                        }
+                    }
+                }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    private var syncPanel: some View {
+    private var overviewCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            panelHeader(title: "Sync Controls", subtitle: "Temporary sync, image pause, and local state.")
-
-            infoRow(symbol: "desktopcomputer", title: "This Mac", value: coordinator.localDeviceName)
-            infoRow(symbol: "lock.shield", title: "Transport", value: "Encrypted")
-            infoRow(symbol: "clock.arrow.circlepath", title: "Mode", value: coordinator.syncModeSummary)
-            infoRow(symbol: "square.stack.3d.up.fill", title: "History", value: "\(coordinator.clipboardHistory.count) items")
-
-            HStack(spacing: 8) {
-                quickPanelButton("Sync 10m", systemImage: "timer") {
-                    coordinator.startTemporarySync()
-                }
-
-                quickPanelButton(coordinator.imageSyncEnabled ? "Pause Images" : "Resume Images", systemImage: "photo") {
-                    coordinator.imageSyncEnabled.toggle()
-                }
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .airCopyPanel(cornerRadius: 16)
-    }
-
-    private var devicesPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            panelHeader(title: "Trusted Macs", subtitle: "Approve devices, send directly, and check delivery state.")
-
-            if coordinator.peerDevices.isEmpty {
-                emptyPanelCopy("No nearby Macs yet", detail: "Keep AirCopy open on your other Macs and approve them here.")
-            } else {
-                ForEach(coordinator.peerDevices) { peer in
-                    PeerDeviceCard(peer: peer)
-                        .environmentObject(coordinator)
-                }
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .airCopyPanel(cornerRadius: 16)
-    }
-
-    private var privacyPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            panelHeader(title: "Privacy", subtitle: "Protected apps and clipboard exclusions.")
-
-            infoRow(symbol: "shield.lefthalf.filled", title: "Password managers", value: "Never synced")
-            infoRow(symbol: "app.badge", title: "Frontmost app", value: coordinator.frontmostApplicationName)
-            infoRow(symbol: "nosign", title: "Custom exclusions", value: "\(coordinator.customExclusionCount)")
-
-            quickPanelButton("Exclude Frontmost App", systemImage: "eye.slash") {
-                coordinator.addFrontmostApplicationToExclusions()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Overview")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                Text("Daily controls stay here. Detailed behavior lives in Settings.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
             }
 
-            if coordinator.excludedApplications.isEmpty {
-                emptyPanelCopy("No custom app exclusions", detail: "Add the frontmost app whenever you want AirCopy to ignore its clipboard.")
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(coordinator.excludedApplications) { exclusion in
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(exclusion.appName)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-                                Text(exclusion.bundleID)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                            }
+            overviewRow(symbol: "desktopcomputer", title: "This Mac", value: coordinator.localDeviceName)
+            overviewRow(symbol: "clock.arrow.circlepath", title: "Sync Mode", value: coordinator.syncModeSummary)
+            overviewRow(symbol: "lock.shield", title: "Transport", value: "Encrypted")
+            overviewRow(symbol: "square.stack.3d.up.fill", title: "History", value: "\(coordinator.clipboardHistory.count) items")
 
-                            Spacer()
-
-                            Button("Remove") {
-                                coordinator.removeExcludedApplication(exclusion)
-                            }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(AirCopyTheme.warning(for: colorScheme))
-                        }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            AirCopyTheme.insetFill(for: colorScheme),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        )
-                    }
-                }
+            Button {
+                coordinator.showSettings()
+            } label: {
+                Label("Open Settings", systemImage: "slider.horizontal.3")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity)
+                    .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .buttonStyle(.plain)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -251,7 +184,7 @@ struct ContentView: View {
 
                 TextField("Search history", text: $searchText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
+                    .frame(width: 240)
             }
 
             Picker("History Filter", selection: $historyFilter) {
@@ -283,32 +216,39 @@ struct ContentView: View {
         .airCopyPanel(cornerRadius: 16)
     }
 
-    private func panelHeader(title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-            Text(subtitle)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-        }
-    }
-
-    private func statusPill(_ title: String, value: String, emphasized: Bool) -> some View {
+    private func summaryChip(_ title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
             Text(value)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(emphasized ? AirCopyTheme.primaryText(for: colorScheme) : AirCopyTheme.secondaryText(for: colorScheme))
+                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(AirCopyTheme.insetFill(for: colorScheme), in: Capsule())
     }
 
-    private func infoRow(symbol: String, title: String, value: String) -> some View {
+    private func deviceSection<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+            }
+
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .airCopyPanel(cornerRadius: 16)
+    }
+
+    private func overviewRow(symbol: String, title: String, value: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .semibold))
@@ -319,7 +259,7 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
 
-            Spacer(minLength: 0)
+            Spacer()
 
             Text(value)
                 .font(.system(size: 11, weight: .medium))
@@ -341,66 +281,9 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
-
-    private func quickPanelButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity)
-                .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func headerActionButton(
-        title: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(AirCopyTheme.buttonTint(for: colorScheme), in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func secondaryHeaderButton(
-        title: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(AirCopyTheme.insetFill(for: colorScheme), in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func appearanceSymbol(for preference: AppearancePreference) -> String {
-        switch preference {
-        case .automatic:
-            return "clock"
-        case .light:
-            return "sun.max.fill"
-        case .dark:
-            return "moon.fill"
-        }
-    }
 }
 
-private struct PeerDeviceCard: View {
+private struct MainPeerCard: View {
     let peer: PeerDeviceState
 
     @EnvironmentObject private var coordinator: AirCopyCoordinator
@@ -409,35 +292,21 @@ private struct PeerDeviceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: peer.isConnected ? "checkmark.shield.fill" : "desktopcomputer")
-                    .font(.system(size: 15, weight: .semibold))
+                Image(systemName: iconName)
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(iconColor)
-                    .frame(width: 20)
+                    .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(peer.displayName)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
 
-                    Text(peer.statusSummary)
+                    Text(statusLine)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        .lineLimit(2)
                 }
-
-                Spacer()
-
-                if let lastReceiptState = peer.lastReceiptState {
-                    Label(lastReceiptState.title, systemImage: lastReceiptState.symbolName)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(iconColor)
-                }
-            }
-
-            if let lastReceiptText = peer.lastReceiptText {
-                Text(lastReceiptText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                    .lineLimit(1)
             }
 
             HStack(spacing: 8) {
@@ -455,18 +324,426 @@ private struct PeerDeviceCard: View {
                             coordinator.sendCurrentClipboard(to: peer.id)
                         }
                     }
-                    actionButton("Block", systemImage: "hand.raised") {
-                        coordinator.blockPeer(peer.id)
+                    actionButton("Manage", systemImage: "gearshape") {
+                        coordinator.showSettings()
                     }
                 case .blocked:
-                    actionButton("Trust", systemImage: "checkmark.shield") {
-                        coordinator.trustPeer(peer.id)
+                    actionButton("Manage", systemImage: "gearshape") {
+                        coordinator.showSettings()
                     }
                 }
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var iconName: String {
+        switch peer.trustState {
+        case .trusted:
+            return peer.isConnected ? "checkmark.shield.fill" : "desktopcomputer"
+        case .pending:
+            return "questionmark.shield"
+        case .blocked:
+            return "hand.raised.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch peer.trustState {
+        case .trusted:
+            return peer.isConnected ? AirCopyTheme.success(for: colorScheme) : AirCopyTheme.accent(for: colorScheme)
+        case .pending:
+            return AirCopyTheme.warning(for: colorScheme)
+        case .blocked:
+            return AirCopyTheme.error(for: colorScheme)
+        }
+    }
+
+    private var statusLine: String {
+        if let lastReceiptText = peer.lastReceiptText, !lastReceiptText.isEmpty {
+            return "\(peer.statusSummary) • \(lastReceiptText)"
+        }
+
+        return peer.statusSummary
+    }
+
+    private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(colorScheme == .light ? 0.9 : 0.06), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
+    case sync
+    case privacy
+    case devices
+    case advanced
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general:
+            return "General"
+        case .sync:
+            return "Sync"
+        case .privacy:
+            return "Privacy"
+        case .devices:
+            return "Devices"
+        case .advanced:
+            return "Advanced"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .general:
+            return "gearshape"
+        case .sync:
+            return "arrow.triangle.2.circlepath"
+        case .privacy:
+            return "hand.raised.shield"
+        case .devices:
+            return "desktopcomputer"
+        case .advanced:
+            return "slider.horizontal.3"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .general:
+            return "Basic app preferences and appearance."
+        case .sync:
+            return "How AirCopy behaves while syncing."
+        case .privacy:
+            return "What AirCopy should never send."
+        case .devices:
+            return "Trust and review nearby Macs."
+        case .advanced:
+            return "Rare and destructive actions."
+        }
+    }
+}
+
+private struct AirCopySettingsView: View {
+    @EnvironmentObject private var coordinator: AirCopyCoordinator
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    @State private var selectedSection: SettingsSection = .general
+
+    var body: some View {
+        HStack(spacing: 0) {
+            settingsSidebar
+                .frame(width: 190)
+                .padding(16)
+                .background(AirCopyTheme.panelFill(for: colorScheme))
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(selectedSection.title)
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                            Text(selectedSection.subtitle)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        }
+
+                        Spacer()
+
+                        Button("Done") {
+                            dismiss()
+                        }
+                    }
+
+                    settingsDetail
+                }
+                .padding(20)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AirCopyTheme.background(for: colorScheme))
+        }
+        .frame(minWidth: 960, minHeight: 640)
+    }
+
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(SettingsSection.allCases) { section in
+                Button {
+                    selectedSection = section
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: section.symbolName)
+                            .frame(width: 16)
+                        Text(section.title)
+                            .font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                    }
+                    .foregroundStyle(
+                        selectedSection == section
+                            ? Color.white
+                            : AirCopyTheme.primaryText(for: colorScheme)
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        selectedSection == section
+                            ? AirCopyTheme.buttonTint(for: colorScheme)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var settingsDetail: some View {
+        switch selectedSection {
+        case .general:
+            settingsGroup(title: "Appearance", subtitle: "Keep visual preferences out of the main workflow.") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Theme")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    Picker("Theme", selection: $coordinator.appearancePreference) {
+                        ForEach(AppearancePreference.allCases) { preference in
+                            Text(preference.title).tag(preference)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+
+            settingsGroup(title: "Device", subtitle: "Read-only device context.") {
+                settingsRow(title: "This Mac", value: coordinator.localDeviceName)
+                settingsRow(title: "Frontmost App", value: coordinator.frontmostApplicationName)
+                settingsRow(title: "Trusted Macs", value: "\(coordinator.peerDevices.filter { $0.trustState == .trusted }.count)")
+            }
+
+        case .sync:
+            settingsGroup(title: "Sync Behavior", subtitle: "Primary sync decisions belong here, not in the main workspace.") {
+                Toggle("Enable clipboard sync", isOn: $coordinator.syncEnabled)
+                Toggle("Sync images", isOn: $coordinator.imageSyncEnabled)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Temporary Sync")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    HStack(spacing: 8) {
+                        settingsActionButton("Sync for 10 Minutes", systemImage: "timer") {
+                            coordinator.startTemporarySync()
+                        }
+
+                        if coordinator.temporarySyncUntil != nil {
+                            settingsActionButton("Cancel Temporary Sync", systemImage: "pause.circle") {
+                                coordinator.cancelTemporarySync()
+                            }
+                        }
+                    }
+
+                    if let until = coordinator.temporarySyncUntil {
+                        Text("Ends \(until.formatted(date: .omitted, time: .shortened))")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                    }
+                }
+            }
+
+        case .privacy:
+            settingsGroup(title: "Privacy Rules", subtitle: "Protect sensitive sources and exclude noisy apps.") {
+                settingsRow(title: "Password managers", value: "Always blocked from sync")
+                settingsRow(title: "Frontmost app", value: coordinator.frontmostApplicationName)
+
+                settingsActionButton("Exclude Frontmost App", systemImage: "eye.slash") {
+                    coordinator.addFrontmostApplicationToExclusions()
+                }
+            }
+
+            settingsGroup(title: "Excluded Apps", subtitle: "AirCopy ignores clipboard changes from these apps.") {
+                if coordinator.excludedApplications.isEmpty {
+                    settingsEmptyState("No custom exclusions yet")
+                } else {
+                    ForEach(coordinator.excludedApplications) { exclusion in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(exclusion.appName)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                                Text(exclusion.bundleID)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                            }
+
+                            Spacer()
+
+                            Button("Remove") {
+                                coordinator.removeExcludedApplication(exclusion)
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.warning(for: colorScheme))
+                        }
+                        .padding(10)
+                        .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
+            }
+
+        case .devices:
+            settingsGroup(title: "Trust Rules", subtitle: "Keep approval and device management together.") {
+                Toggle("Require approval for new Macs", isOn: $coordinator.requireDeviceApproval)
+            }
+
+            settingsGroup(title: "Known Macs", subtitle: "Approve, block, and review nearby devices.") {
+                if coordinator.peerDevices.isEmpty {
+                    settingsEmptyState("No Macs discovered yet")
+                } else {
+                    ForEach(coordinator.peerDevices) { peer in
+                        SettingsPeerRow(peer: peer)
+                            .environmentObject(coordinator)
+                    }
+                }
+            }
+
+        case .advanced:
+            settingsGroup(title: "Local Cleanup", subtitle: "These actions affect only this Mac.") {
+                HStack(spacing: 8) {
+                    settingsActionButton("Clear This Mac Clipboard", systemImage: "trash") {
+                        coordinator.clearClipboard()
+                    }
+
+                    settingsActionButton("Clear Local History", systemImage: "xmark.bin") {
+                        coordinator.clearHistory()
+                    }
+                }
+            }
+        }
+    }
+
+    private func settingsGroup<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+            }
+
+            content()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .airCopyPanel(cornerRadius: 18)
+    }
+
+    private func settingsRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+            Spacer()
+            Text(value)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                .lineLimit(1)
+        }
+    }
+
+    private func settingsActionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func settingsEmptyState(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct SettingsPeerRow: View {
+    let peer: PeerDeviceState
+
+    @EnvironmentObject private var coordinator: AirCopyCoordinator
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: peer.isConnected ? "desktopcomputer.and.arrow.down" : "desktopcomputer")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(iconColor)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(peer.displayName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                Text(peer.statusSummary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+            }
+
+            Spacer()
+
+            if peer.trustState == .trusted, peer.isConnected {
+                rowActionButton("Send Current") {
+                    coordinator.sendCurrentClipboard(to: peer.id)
+                }
+            }
+
+            switch peer.trustState {
+            case .pending:
+                rowActionButton("Trust") {
+                    coordinator.trustPeer(peer.id)
+                }
+                rowActionButton("Block") {
+                    coordinator.blockPeer(peer.id)
+                }
+            case .trusted:
+                rowActionButton("Block") {
+                    coordinator.blockPeer(peer.id)
+                }
+            case .blocked:
+                rowActionButton("Trust") {
+                    coordinator.trustPeer(peer.id)
+                }
+            }
+        }
+        .padding(10)
         .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -481,16 +758,13 @@ private struct PeerDeviceCard: View {
         }
     }
 
-    private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(Color.white.opacity(colorScheme == .light ? 0.9 : 0.06), in: Capsule())
-        }
-        .buttonStyle(.plain)
+    private func rowActionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(colorScheme == .light ? 0.9 : 0.08), in: Capsule())
     }
 }
 

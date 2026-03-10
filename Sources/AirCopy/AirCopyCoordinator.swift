@@ -32,6 +32,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
+    @Published var settingsPresented = false
+
     @Published var appearancePreference: AppearancePreference {
         didSet {
             UserDefaults.standard.set(appearancePreference.rawValue, forKey: Self.appearancePreferenceKey)
@@ -418,6 +420,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             window.orderFrontRegardless()
             window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    func showSettings() {
+        showMainWindow()
+        settingsPresented = true
     }
 
     private func startServices() {

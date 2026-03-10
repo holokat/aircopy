@@ -12,6 +12,12 @@ struct MenuBarContentView: View {
             menuRowLabel("Open AirCopy", systemImage: "macwindow")
         }
 
+        Button {
+            coordinator.showSettings()
+        } label: {
+            menuRowLabel("Open Settings", systemImage: "gearshape")
+        }
+
         Divider()
 
         Toggle(isOn: $coordinator.syncEnabled) {
