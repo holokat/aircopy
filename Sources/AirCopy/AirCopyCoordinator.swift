@@ -33,17 +33,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
-    @Published var screenshotStyleSettings = ScreenshotStyleSettings() {
-        didSet {
-            persistScreenshotStyleSettings()
-
-            if oldValue.importSystemScreenshots != screenshotStyleSettings.importSystemScreenshots
-                || oldValue.watchedFolderPath != screenshotStyleSettings.watchedFolderPath {
-                refreshScreenshotImportWatcher()
-            }
-        }
-    }
-
     @Published var saveReceivedItemsToDiskEnabled = false {
         didSet {
             UserDefaults.standard.set(saveReceivedItemsToDiskEnabled, forKey: Self.saveReceivedItemsToDiskEnabledKey)
@@ -120,10 +109,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         "com.dashlane.dashlanephonefinal",
         "org.keepassxc.keepassxc"
     ]
-    private static let imageFileExtensions: Set<String> = [
-        "png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "heif",
-        "tif", "tiff", "bmp", "avif", "jxl", "icns"
-    ]
 
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser?
@@ -144,16 +129,13 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var clipboardTask: Task<Void, Never>?
     private var appearanceTask: Task<Void, Never>?
     private var syncExpirationTask: Task<Void, Never>?
-    private var screenshotImportTask: Task<Void, Never>?
     private var clearCopiedStateTask: Task<Void, Never>?
     private var lastObservedChangeCount: Int
     private var lastKnownPayload: ClipboardPayload?
     private var pendingRemotePayload: ClipboardPayload?
-    private var knownScreenshotFileSignatures: Set<String> = []
 
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
-    private static let screenshotStyleSettingsKey = "screenshot-style-settings"
     private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
     private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
     private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
@@ -175,14 +157,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let storedAppearance = defaults.string(forKey: Self.appearancePreferenceKey)
         let appearance = AppearancePreference(rawValue: storedAppearance ?? "") ?? .automatic
         let frontmost = Self.frontmostApplicationInfo()
-        let loadedScreenshotStyleSettings = Self.loadScreenshotStyleSettings(forKey: Self.screenshotStyleSettingsKey)
 
         self.localDeviceName = resolvedName
         self.appearancePreference = appearance
         self.deviceID = Self.loadOrCreateDeviceID()
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
-        self.screenshotStyleSettings = loadedScreenshotStyleSettings
         self.saveReceivedItemsToDiskEnabled = defaults.object(forKey: Self.saveReceivedItemsToDiskEnabledKey) as? Bool ?? false
         self.saveReceivedImagesToDisk = defaults.object(forKey: Self.saveReceivedImagesToDiskKey) as? Bool ?? true
         self.saveReceivedTextToDisk = defaults.object(forKey: Self.saveReceivedTextToDiskKey) as? Bool ?? true
@@ -205,8 +185,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             from: NSPasteboard.general,
             maxInlineAttachmentBytes: 8 * 1024 * 1024,
             sourceAppBundleID: frontmost.bundleID,
-            sourceAppName: frontmost.name,
-            screenshotStyleSettings: loadedScreenshotStyleSettings
+            sourceAppName: frontmost.name
         )
         super.init()
 
@@ -242,7 +221,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         startClipboardMonitor()
         startAppearanceMonitor()
         scheduleSyncExpirationTask()
-        refreshScreenshotImportWatcher()
         statusText = connectedPeerCount == 0 ? "Approve a nearby Mac or keep syncing locally." : "Ready."
     }
 
@@ -250,7 +228,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         clipboardTask?.cancel()
         appearanceTask?.cancel()
         syncExpirationTask?.cancel()
-        screenshotImportTask?.cancel()
         clearCopiedStateTask?.cancel()
     }
 
@@ -327,14 +304,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         (savedItemsBaseDirectoryPath as NSString).abbreviatingWithTildeInPath
     }
 
-    var screenshotStylePreviewImage: NSImage? {
-        ScreenshotStyleRenderer.previewImage(using: screenshotStyleSettings)
-    }
-
-    var screenshotWatchFolderDisplayPath: String {
-        (resolvedScreenshotWatchFolderURL.path as NSString).abbreviatingWithTildeInPath
-    }
-
     func filteredHistory(searchText: String, filter: HistoryFilter) -> [ClipboardHistoryItem] {
         clipboardHistory
             .filter { item in
@@ -384,8 +353,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             from: NSPasteboard.general,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
             sourceAppBundleID: frontmost.bundleID,
-            sourceAppName: frontmost.name,
-            screenshotStyleSettings: screenshotStyleSettings
+            sourceAppName: frontmost.name
         ) else {
             statusText = "Nothing sendable is in the clipboard."
             return
@@ -533,37 +501,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
-    func chooseScreenshotWatchFolder() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose Screenshot Folder"
-        panel.prompt = "Choose Folder"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = resolvedScreenshotWatchFolderURL
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        screenshotStyleSettings.watchedFolderPath = url.path
-        statusText = "Watching \(screenshotWatchFolderDisplayPath) for screenshots."
-    }
-
-    func resetScreenshotWatchFolderToSystemDefault() {
-        screenshotStyleSettings.watchedFolderPath = nil
-        statusText = "Watching the macOS screenshot folder."
-    }
-
-    func openScreenshotWatchFolder() {
-        let directory = resolvedScreenshotWatchFolderURL
-
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(directory)
-        } catch {
-            statusText = "Unable to open screenshot folder: \(error.localizedDescription)"
-        }
-    }
-
     func openLatestImage() {
         guard let item = latestImageItem else {
             statusText = "No image available to open."
@@ -708,92 +645,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
-    private func refreshScreenshotImportWatcher() {
-        screenshotImportTask?.cancel()
-        screenshotImportTask = nil
-        knownScreenshotFileSignatures = Set(
-            screenshotCandidateFiles(in: resolvedScreenshotWatchFolderURL).map(fileSignature(for:))
-        )
-
-        guard screenshotStyleSettings.importSystemScreenshots else { return }
-
-        screenshotImportTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(850))
-                await MainActor.run {
-                    self?.pollScreenshotFolder()
-                }
-            }
-        }
-    }
-
-    private func pollScreenshotFolder() {
-        let candidates = screenshotCandidateFiles(in: resolvedScreenshotWatchFolderURL)
-        guard !candidates.isEmpty else { return }
-
-        let sortedCandidates = candidates.sorted { lhs, rhs in
-            screenshotTimestamp(for: lhs) < screenshotTimestamp(for: rhs)
-        }
-
-        for url in sortedCandidates {
-            let signature = fileSignature(for: url)
-            guard !knownScreenshotFileSignatures.contains(signature) else { continue }
-
-            if importScreenshotFileIfPossible(url) {
-                knownScreenshotFileSignatures.insert(signature)
-            }
-        }
-
-        knownScreenshotFileSignatures = Set(sortedCandidates.map(fileSignature(for:)))
-    }
-
-    @discardableResult
-    private func importScreenshotFileIfPossible(_ fileURL: URL) -> Bool {
-        guard let imageData = try? Data(contentsOf: fileURL),
-              !imageData.isEmpty,
-              NSImage(data: imageData) != nil else {
-            return false
-        }
-
-        let processedImageData = ScreenshotStyleRenderer.styledImageData(
-            from: imageData,
-            settings: screenshotStyleSettings,
-            sourceAppBundleID: "com.apple.screencapture",
-            sourceAppName: "Screenshot"
-        )
-
-        let payload = ClipboardPayload(
-            imageData: processedImageData,
-            isLikelyScreenshot: true,
-            sourceAppBundleID: "com.apple.screencapture",
-            sourceAppName: "Screenshot"
-        )
-
-        pendingRemotePayload = nil
-        lastKnownPayload = payload
-        writePayloadToPasteboard(payload)
-
-        let item = recordHistory(
-            payload: payload,
-            source: "Imported from macOS screenshot",
-            senderName: localDeviceName,
-            date: Date()
-        )
-
-        if !imageSyncEnabled {
-            statusText = "Imported screenshot locally. Image sync is paused."
-            return true
-        }
-
-        guard syncEnabled else {
-            statusText = "Imported screenshot locally. Sync is off."
-            return true
-        }
-
-        sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
-        return true
-    }
-
     private func scheduleSyncExpirationTask() {
         syncExpirationTask?.cancel()
 
@@ -830,8 +681,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             from: pasteboard,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
             sourceAppBundleID: frontmost.bundleID,
-            sourceAppName: frontmost.name,
-            screenshotStyleSettings: screenshotStyleSettings
+            sourceAppName: frontmost.name
         ) else {
             lastKnownPayload = nil
             return
@@ -1378,15 +1228,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         return !autoSyncDisabledDeviceIDs.contains(deviceID)
     }
 
-    private var resolvedScreenshotWatchFolderURL: URL {
-        if let customPath = screenshotStyleSettings.watchedFolderPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !customPath.isEmpty {
-            return URL(fileURLWithPath: (customPath as NSString).expandingTildeInPath, isDirectory: true)
-        }
-
-        return Self.systemScreenshotFolderURL()
-    }
-
     private var savedItemsBaseDirectoryURL: URL {
         let trimmedPath = savedItemsBaseDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedPath = trimmedPath.isEmpty ? Self.defaultSavedItemsBaseDirectory.path : trimmedPath
@@ -1396,19 +1237,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static var defaultSavedItemsBaseDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("AirCopy", isDirectory: true)
-    }
-
-    private static func systemScreenshotFolderURL() -> URL {
-        if let location = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location"),
-           !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(
-                fileURLWithPath: (location as NSString).expandingTildeInPath,
-                isDirectory: true
-            )
-        }
-
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop", isDirectory: true)
     }
 
     private func saveReceivedPayloadToDiskIfNeeded(_ payload: ClipboardPayload, date: Date) -> SaveReceivedPayloadResult {
@@ -1600,72 +1428,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         return formatter.string(from: date)
     }
 
-    private func screenshotCandidateFiles(in folderURL: URL) -> [URL] {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: folderURL,
-            includingPropertiesForKeys: [
-                .isRegularFileKey,
-                .contentTypeKey,
-                .creationDateKey,
-                .contentModificationDateKey
-            ],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
-        }
-
-        return urls.filter { url in
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey]),
-                  values.isRegularFile == true else {
-                return false
-            }
-
-            let isImage = values.contentType?.conforms(to: .image) == true
-                || Self.imageFileExtensions.contains(url.pathExtension.lowercased())
-
-            guard isImage else { return false }
-            return Self.looksLikeSystemScreenshotFilename(url.lastPathComponent)
-        }
-    }
-
-    private func fileSignature(for fileURL: URL) -> String {
-        let timestamp = screenshotTimestamp(for: fileURL)
-        return "\(fileURL.path)#\(timestamp.timeIntervalSince1970)"
-    }
-
-    private func screenshotTimestamp(for fileURL: URL) -> Date {
-        let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
-        return values?.contentModificationDate ?? values?.creationDate ?? Date.distantPast
-    }
-
-    private static func looksLikeSystemScreenshotFilename(_ filename: String) -> Bool {
-        let normalized = filename
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
-
-        let screenshotMarkers = [
-            "screenshot",
-            "screen shot",
-            "screen-shot",
-            "screen_shot",
-            "screencapture",
-            "screen capture",
-            "スクリーンショット",
-            "captura de pantalla",
-            "captura de ecran",
-            "captura de tela",
-            "截屏",
-            "截圖"
-        ]
-
-        return screenshotMarkers.contains { normalized.contains($0) }
-    }
-
     private func shouldSuppressSync(for payload: ClipboardPayload) -> Bool {
-        if payload.isLikelyScreenshot {
-            return false
-        }
-
         guard let bundleID = payload.sourceAppBundleID else { return false }
 
         let lowercasedBundleID = bundleID.lowercased()
@@ -1696,11 +1459,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         UserDefaults.standard.set(Array(set).sorted(), forKey: key)
     }
 
-    private func persistScreenshotStyleSettings() {
-        guard let data = try? JSONEncoder().encode(screenshotStyleSettings) else { return }
-        UserDefaults.standard.set(data, forKey: Self.screenshotStyleSettingsKey)
-    }
-
     private static func loadStringSet(forKey key: String) -> Set<String> {
         let values = UserDefaults.standard.stringArray(forKey: key) ?? []
         return Set(values)
@@ -1713,15 +1471,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return map
-    }
-
-    private static func loadScreenshotStyleSettings(forKey key: String) -> ScreenshotStyleSettings {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let settings = try? JSONDecoder().decode(ScreenshotStyleSettings.self, from: data) else {
-            return ScreenshotStyleSettings()
-        }
-
-        return settings
     }
 
     private static func loadOrCreateDeviceID() -> String {
@@ -1746,25 +1495,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         from pasteboard: NSPasteboard,
         maxInlineAttachmentBytes: Int64,
         sourceAppBundleID: String?,
-        sourceAppName: String?,
-        screenshotStyleSettings: ScreenshotStyleSettings
+        sourceAppName: String?
     ) -> ClipboardPayload? {
         if let imagePayload = imagePayload(
             from: pasteboard,
             sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName,
-            screenshotStyleSettings: screenshotStyleSettings
+            sourceAppName: sourceAppName
         ) {
             return imagePayload
-        }
-
-        if let screenshotAttachmentPayload = screenshotImageAttachmentPayload(
-            from: pasteboard,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName,
-            screenshotStyleSettings: screenshotStyleSettings
-        ) {
-            return screenshotAttachmentPayload
         }
 
         if let attachmentPayload = attachmentPayload(
@@ -1815,8 +1553,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static func imagePayload(
         from pasteboard: NSPasteboard,
         sourceAppBundleID: String?,
-        sourceAppName: String?,
-        screenshotStyleSettings: ScreenshotStyleSettings
+        sourceAppName: String?
     ) -> ClipboardPayload? {
         guard containsDirectImagePayload(in: pasteboard),
               let imageData = pngData(from: pasteboard),
@@ -1824,21 +1561,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return nil
         }
 
-        let processedImageData = ScreenshotStyleRenderer.styledImageData(
-            from: imageData,
-            settings: screenshotStyleSettings,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        )
-        let isLikelyScreenshot = isLikelyScreenshotCapture(
-            pasteboard: pasteboard,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        )
-
         return ClipboardPayload(
-            imageData: processedImageData,
-            isLikelyScreenshot: isLikelyScreenshot,
+            imageData: imageData,
             sourceAppBundleID: sourceAppBundleID,
             sourceAppName: sourceAppName
         )
@@ -1846,7 +1570,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private static func containsDirectImagePayload(in pasteboard: NSPasteboard) -> Bool {
         if let types = pasteboard.types,
-           types.contains(where: { pasteboardTypeLooksLikeImage($0) }) {
+           types.contains(where: { $0 == .png || $0 == .tiff }) {
             return true
         }
 
@@ -1856,100 +1580,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return false
-    }
-
-    private static func screenshotImageAttachmentPayload(
-        from pasteboard: NSPasteboard,
-        sourceAppBundleID: String?,
-        sourceAppName: String?,
-        screenshotStyleSettings: ScreenshotStyleSettings
-    ) -> ClipboardPayload? {
-        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] else { return nil }
-        let fileURLs = urls.filter(\.isFileURL)
-        guard fileURLs.count == 1, let fileURL = fileURLs.first else { return nil }
-        guard looksLikeScreenshotFile(fileURL) || isLikelyScreenshotCapture(
-            pasteboard: pasteboard,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        ) else {
-            return nil
-        }
-
-        guard let values = try? fileURL.resourceValues(forKeys: [
-            .isDirectoryKey,
-            .contentTypeKey,
-            .fileSizeKey
-        ]),
-        values.isDirectory != true else {
-            return nil
-        }
-
-        let isImageLike = values.contentType?.conforms(to: .image) == true
-            || Self.imageFileExtensions.contains(fileURL.pathExtension.lowercased())
-        guard isImageLike, let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else {
-            return nil
-        }
-
-        let processedImageData = ScreenshotStyleRenderer.styledImageData(
-            from: imageData,
-            settings: screenshotStyleSettings,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        )
-
-        return ClipboardPayload(
-            imageData: processedImageData,
-            isLikelyScreenshot: true,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        )
-    }
-
-    private static func pasteboardTypeLooksLikeImage(_ type: NSPasteboard.PasteboardType) -> Bool {
-        if type == .png || type == .tiff {
-            return true
-        }
-
-        guard let contentType = UTType(type.rawValue) else { return false }
-        return contentType.conforms(to: .image)
-    }
-
-    private static func isLikelyScreenshotCapture(
-        pasteboard: NSPasteboard,
-        sourceAppBundleID: String?,
-        sourceAppName: String?
-    ) -> Bool {
-        let lowercasedBundleID = sourceAppBundleID?.lowercased() ?? ""
-        let lowercasedName = sourceAppName?.lowercased() ?? ""
-
-        if lowercasedBundleID.contains("screenshot")
-            || lowercasedBundleID.contains("screencapture")
-            || lowercasedName.contains("screenshot")
-            || lowercasedName.contains("screen capture") {
-            return true
-        }
-
-        if let types = pasteboard.types,
-           types.contains(where: { type in
-               let value = type.rawValue.lowercased()
-               return value.contains("screenshot") || value.contains("screencapture")
-           }) {
-            return true
-        }
-
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-           urls.contains(where: { looksLikeScreenshotFile($0) }) {
-            return true
-        }
-
-        return false
-    }
-
-    private static func looksLikeScreenshotFile(_ fileURL: URL) -> Bool {
-        let candidate = "\(fileURL.lastPathComponent) \(fileURL.path)".lowercased()
-        return candidate.contains("screenshot")
-            || candidate.contains("screen shot")
-            || candidate.contains("screencapture")
     }
 
     private static func attachmentPayload(
@@ -2082,16 +1712,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static func pngData(from pasteboard: NSPasteboard) -> Data? {
         if let pngData = pasteboard.data(forType: .png) {
             return pngData
-        }
-
-        if let types = pasteboard.types {
-            for type in types where pasteboardTypeLooksLikeImage(type) {
-                if let directData = pasteboard.data(forType: type),
-                   let image = NSImage(data: directData),
-                   let pngData = pngData(from: image) {
-                    return pngData
-                }
-            }
         }
 
         if let tiffData = pasteboard.data(forType: .tiff),

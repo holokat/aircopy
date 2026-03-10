@@ -225,7 +225,6 @@ struct ClipboardPayload: Codable, Hashable {
     let languageHint: String?
     let sourceAppBundleID: String?
     let sourceAppName: String?
-    let isLikelyScreenshot: Bool
     let createdAt: Date
 
     init(
@@ -238,7 +237,6 @@ struct ClipboardPayload: Codable, Hashable {
         languageHint: String? = nil,
         sourceAppBundleID: String? = nil,
         sourceAppName: String? = nil,
-        isLikelyScreenshot: Bool = false,
         createdAt: Date = Date()
     ) {
         self.kind = kind
@@ -250,7 +248,6 @@ struct ClipboardPayload: Codable, Hashable {
         self.languageHint = languageHint
         self.sourceAppBundleID = sourceAppBundleID
         self.sourceAppName = sourceAppName
-        self.isLikelyScreenshot = isLikelyScreenshot
         self.createdAt = createdAt
     }
 
@@ -275,17 +272,10 @@ struct ClipboardPayload: Codable, Hashable {
 
     init(
         imageData: Data,
-        isLikelyScreenshot: Bool = false,
         sourceAppBundleID: String? = nil,
         sourceAppName: String? = nil
     ) {
-        self.init(
-            kind: .image,
-            imageData: imageData,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName,
-            isLikelyScreenshot: isLikelyScreenshot
-        )
+        self.init(kind: .image, imageData: imageData, sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName)
     }
 
     init(
