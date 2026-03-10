@@ -2,5 +2,6 @@
 .build/
 .swiftpm/
 dist/
+.netlify/
 website/.netlify/
 website/node_modules/
