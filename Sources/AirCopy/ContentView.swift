@@ -867,10 +867,7 @@ private struct HistoryItemCard: View {
                         }
                     }
 
-                    Text(item.previewText)
-                        .font(item.kind == .code ? .system(size: 11, weight: .medium, design: .monospaced) : .system(size: 11, weight: .medium))
-                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                        .lineLimit(item.kind == .code ? 3 : 2)
+                    previewTextView
 
                     HStack(spacing: 4) {
                         Text(item.kind.title)
@@ -956,6 +953,28 @@ private struct HistoryItemCard: View {
     }
 
     @ViewBuilder
+    private var previewTextView: some View {
+        if historyLinkURL != nil {
+            Button(action: openHistoryLink) {
+                Text(item.previewText)
+                    .font(.system(size: 11, weight: .medium))
+                    .underline()
+                    .foregroundStyle(AirCopyTheme.accent(for: colorScheme))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(item.title)")
+        } else {
+            Text(item.previewText)
+                .font(item.kind == .code ? .system(size: 11, weight: .medium, design: .monospaced) : .system(size: 11, weight: .medium))
+                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                .lineLimit(item.kind == .code ? 3 : 2)
+        }
+    }
+
+    @ViewBuilder
     private var previewBlock: some View {
         if isPreviewable, let onPreview {
             Button(action: onPreview) {
@@ -1015,6 +1034,16 @@ private struct HistoryItemCard: View {
         item.kind == .text || item.kind == .code || item.kind == .image || item.payload.isImageFileAttachment
     }
 
+    private var historyLinkURL: URL? {
+        guard item.kind == .link || item.kind == .browserTab,
+              let urlString = item.payload.urlString,
+              let url = URL(string: urlString) else {
+            return nil
+        }
+
+        return url
+    }
+
     private func previewIcon(symbol: String, color: Color) -> some View {
         Image(systemName: symbol)
             .font(.system(size: 16, weight: .semibold))
@@ -1034,6 +1063,11 @@ private struct HistoryItemCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func openHistoryLink() {
+        guard let historyLinkURL else { return }
+        NSWorkspace.shared.open(historyLinkURL)
     }
 
     private func receiptColor(for state: DeliveryState) -> Color {
