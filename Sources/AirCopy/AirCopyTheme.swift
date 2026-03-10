@@ -83,6 +83,12 @@ enum AirCopyTheme {
             : Color(red: 0.75, green: 0.66, blue: 1.00)
     }
 
+    static func syncTint(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .light
+            ? Color(red: 0.17, green: 0.49, blue: 0.96)
+            : Color(red: 0.39, green: 0.68, blue: 1.00)
+    }
+
     static func codeBlockFill(for colorScheme: ColorScheme) -> Color {
         colorScheme == .light
             ? Color(red: 0.18, green: 0.20, blue: 0.27)
