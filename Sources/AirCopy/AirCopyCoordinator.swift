@@ -207,6 +207,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         clipboardHistory.first(where: { $0.kind == .image })
     }
 
+    var hasClearableHistory: Bool {
+        clipboardHistory.contains(where: { !$0.isPinned && !$0.isFavorite })
+    }
+
     var trustedConnectedPeers: [PeerDeviceState] {
         peerDevices.filter { $0.isConnected && $0.trustState == .trusted }
     }
@@ -318,6 +322,22 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     func clearHistory() {
         clipboardHistory.removeAll()
         statusText = "Local history cleared."
+    }
+
+    func clearNonRetainedHistory() {
+        let removedCount = clipboardHistory.reduce(into: 0) { count, item in
+            if !item.isPinned && !item.isFavorite {
+                count += 1
+            }
+        }
+
+        guard removedCount > 0 else {
+            statusText = "Only pinned and favorited clips remain."
+            return
+        }
+
+        clipboardHistory.removeAll { !$0.isPinned && !$0.isFavorite }
+        statusText = "Cleared \(removedCount) history item\(removedCount == 1 ? "" : "s")."
     }
 
     func togglePin(for item: ClipboardHistoryItem) {

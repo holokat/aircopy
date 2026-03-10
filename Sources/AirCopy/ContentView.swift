@@ -182,12 +182,41 @@ struct ContentView: View {
                     .frame(width: 240)
             }
 
-            Picker("History Filter", selection: $historyFilter) {
-                ForEach(HistoryFilter.allCases) { filter in
-                    Text(filter.title).tag(filter)
+            HStack(alignment: .center, spacing: 10) {
+                Picker("History Filter", selection: $historyFilter) {
+                    ForEach(HistoryFilter.allCases) { filter in
+                        Text(filter.title).tag(filter)
+                    }
                 }
+                .pickerStyle(.segmented)
+
+                Spacer(minLength: 8)
+
+                Button(action: coordinator.clearNonRetainedHistory) {
+                    Text("Clear History")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(
+                            coordinator.hasClearableHistory
+                                ? AirCopyTheme.secondaryText(for: colorScheme)
+                                : AirCopyTheme.secondaryText(for: colorScheme).opacity(0.6)
+                        )
+                        .padding(.horizontal, 12)
+                        .frame(height: 28)
+                        .background(
+                            AirCopyTheme.insetFill(for: colorScheme).opacity(coordinator.hasClearableHistory ? 1 : 0.75),
+                            in: Capsule()
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(
+                                    AirCopyTheme.divider(for: colorScheme).opacity(colorScheme == .light ? 0.85 : 0.55),
+                                    lineWidth: 1
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!coordinator.hasClearableHistory)
             }
-            .pickerStyle(.segmented)
 
             let items = coordinator.filteredHistory(searchText: searchText, filter: historyFilter)
 
