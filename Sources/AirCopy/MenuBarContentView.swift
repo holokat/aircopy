@@ -21,7 +21,7 @@ struct MenuBarContentView: View {
         Divider()
 
         Toggle(isOn: $coordinator.syncEnabled) {
-            menuRowLabel(coordinator.syncEnabled ? "Clipboard Sync On" : "Clipboard Sync Off", systemImage: "bolt.horizontal.circle")
+            menuRowLabel(coordinator.syncEnabled ? "Sync to All On" : "Sync to All Off", systemImage: "bolt.horizontal.circle")
         }
 
         Toggle(isOn: $coordinator.imageSyncEnabled) {

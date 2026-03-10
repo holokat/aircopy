@@ -118,7 +118,7 @@ struct ContentView: View {
 
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Always Sync")
+                    Text("Sync to All")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
 
@@ -129,7 +129,7 @@ struct ContentView: View {
 
                 Spacer()
 
-                Toggle("Always Sync", isOn: alwaysSyncBinding)
+                Toggle("Sync to All", isOn: alwaysSyncBinding)
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .controlSize(.small)
@@ -522,7 +522,7 @@ private struct AirCopySettingsView: View {
 
         case .sync:
             settingsGroup(title: "Sync Behavior", subtitle: "Primary sync decisions belong here, not in the main workspace.") {
-                Toggle("Enable clipboard sync", isOn: $coordinator.syncEnabled)
+                Toggle("Sync clipboard to all trusted Macs", isOn: $coordinator.syncEnabled)
                 Toggle("Sync images", isOn: $coordinator.imageSyncEnabled)
 
                 VStack(alignment: .leading, spacing: 8) {

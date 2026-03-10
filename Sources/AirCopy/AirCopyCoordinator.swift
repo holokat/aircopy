@@ -12,10 +12,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
             if syncEnabled {
                 startServices()
-                statusText = "Always Sync is on."
+                statusText = "Sync to All is on."
             } else {
                 temporarySyncUntil = nil
-                statusText = "Always Sync is off. Trusted Macs stay available for manual sends."
+                statusText = "Sync to All is off. Trusted Macs stay available for manual sends."
             }
         }
     }
