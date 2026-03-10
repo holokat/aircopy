@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
+import UniformTypeIdentifiers
 
 enum ClipboardPayloadKind: String, Codable, Hashable, CaseIterable, Identifiable {
     case text
@@ -192,6 +193,26 @@ struct ClipboardAttachment: Identifiable, Codable, Hashable {
         guard let byteCount else { return nil }
         return ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
     }
+
+    var isImageLike: Bool {
+        if let typeIdentifier,
+           let contentType = UTType(typeIdentifier),
+           contentType.conforms(to: .image) {
+            return true
+        }
+
+        if let typeIdentifier,
+           typeIdentifier.lowercased() == "public.svg-image" {
+            return true
+        }
+
+        let imageExtensions: Set<String> = [
+            "png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "heif",
+            "tif", "tiff", "bmp", "avif", "jxl", "icns"
+        ]
+
+        return imageExtensions.contains(fileExtension)
+    }
 }
 
 struct ClipboardPayload: Codable, Hashable {
@@ -371,12 +392,26 @@ struct ClipboardPayload: Codable, Hashable {
     }
 
     var symbolName: String {
-        kind.symbolName
+        if isImageFileAttachment {
+            return ClipboardPayloadKind.image.symbolName
+        }
+
+        return kind.symbolName
     }
 
     var image: NSImage? {
-        guard let imageData else { return nil }
-        return NSImage(data: imageData)
+        if let imageData {
+            return NSImage(data: imageData)
+        }
+
+        guard isImageFileAttachment,
+              attachments.count == 1,
+              let attachment = attachments.first,
+              let inlineData = attachment.inlineData else {
+            return nil
+        }
+
+        return NSImage(data: inlineData)
     }
 
     var imageSize: NSSize? {
@@ -411,6 +446,10 @@ struct ClipboardPayload: Codable, Hashable {
         case .file, .folder:
             return attachments.map(\.originalPath).joined(separator: "\n")
         }
+    }
+
+    var isImageFileAttachment: Bool {
+        kind == .file && !attachments.isEmpty && attachments.allSatisfy(\.isImageLike)
     }
 
     private var attachmentSummary: String {

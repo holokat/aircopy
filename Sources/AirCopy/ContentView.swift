@@ -949,6 +949,13 @@ private struct HistoryItemCard: View {
 
     @ViewBuilder
     private var previewBlock: some View {
+        if item.payload.isImageFileAttachment, let image = item.image {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
         switch item.kind {
         case .image:
             if let image = item.image {
@@ -971,9 +978,15 @@ private struct HistoryItemCard: View {
         case .link, .browserTab:
             previewIcon(symbol: item.symbolName, color: AirCopyTheme.highlight(for: colorScheme))
         case .file, .folder:
-            previewIcon(symbol: item.symbolName, color: AirCopyTheme.warning(for: colorScheme))
+            previewIcon(
+                symbol: item.symbolName,
+                color: item.payload.isImageFileAttachment
+                    ? AirCopyTheme.highlight(for: colorScheme)
+                    : AirCopyTheme.warning(for: colorScheme)
+            )
         case .text:
             previewIcon(symbol: item.symbolName, color: AirCopyTheme.accent(for: colorScheme))
+        }
         }
     }
 

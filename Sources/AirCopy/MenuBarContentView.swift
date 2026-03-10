@@ -54,7 +54,7 @@ struct MenuBarContentView: View {
                 }
             }
 
-            Menu("Send Latest To") {
+            Menu {
                 if coordinator.trustedConnectedPeers.isEmpty {
                     Text("No trusted connected Macs")
                 } else {
@@ -64,6 +64,8 @@ struct MenuBarContentView: View {
                         }
                     }
                 }
+            } label: {
+                submenuRowLabel("Send Latest To", systemImage: "paperplane")
             }
 
             Button(latest.isPinned ? "Unpin Latest Item" : "Pin Latest Item") {
@@ -91,7 +93,7 @@ struct MenuBarContentView: View {
 
         Divider()
 
-        Menu("Recent Clips") {
+        Menu {
             if coordinator.clipboardHistory.isEmpty {
                 Text("No recent clips yet")
             } else {
@@ -101,6 +103,8 @@ struct MenuBarContentView: View {
                     }
                 }
             }
+        } label: {
+            submenuRowLabel("Recent Clips", systemImage: "clock.arrow.circlepath")
         }
 
         Divider()
@@ -145,6 +149,20 @@ struct MenuBarContentView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
+        }
+        .frame(width: rowWidth, alignment: .leading)
+    }
+
+    private func submenuRowLabel(_ text: String, systemImage: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .frame(width: 16)
+            Text(text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
         }
         .frame(width: rowWidth, alignment: .leading)
     }
