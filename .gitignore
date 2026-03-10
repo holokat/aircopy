@@ -1,0 +1,6 @@
+.DS_Store
+.build/
+.swiftpm/
+dist/
+website/.netlify/
+website/node_modules/

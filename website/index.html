@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirCopy</title>
+    <meta
+      name="description"
+      content="Install AirCopy on your Macs and copy on one machine, paste on another. No shared Apple account required."
+    />
+    <link rel="icon" type="image/png" href="./assets/aircopy-logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="#top" aria-label="AirCopy home">
+          <img src="./assets/aircopy-logo.png" alt="" />
+          <span>AirCopy</span>
+        </a>
+        <nav class="topnav" aria-label="Primary">
+          <a href="#features">Features</a>
+          <a href="#how-it-works">How it works</a>
+          <a href="#privacy">Privacy</a>
+        </nav>
+        <a class="button button-ghost" href="#install">Install</a>
+      </header>
+
+      <main id="top">
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Cross-device clipboard sync for macOS</p>
+            <h1>Copy on one Mac. Paste on another.</h1>
+            <p class="hero-text">
+              AirCopy keeps text and images moving between your Macs over local
+              peer discovery. Install it on every machine you use and the
+              clipboard stays in step, even without the same Apple account.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#install">Get AirCopy</a>
+              <a class="button button-secondary" href="#features">See features</a>
+            </div>
+            <ul class="hero-points" aria-label="Highlights">
+              <li>No shared Apple account required</li>
+              <li>Text and image support</li>
+              <li>Recent clipboard history built in</li>
+            </ul>
+          </div>
+
+          <div class="hero-visual" aria-hidden="true">
+            <div class="window-card">
+              <div class="window-bar">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="window-body">
+                <div class="window-sidebar">
+                  <div class="sidebar-block">
+                    <p>Connected Macs</p>
+                    <strong>K's MacBook Air</strong>
+                    <strong>K's Mac Studio</strong>
+                  </div>
+                  <div class="sidebar-block">
+                    <p>Clipboard</p>
+                    <strong>Text</strong>
+                    <strong>Images</strong>
+                  </div>
+                </div>
+                <div class="window-content">
+                  <div class="content-pill">Connected</div>
+                  <h2>Recent Clips</h2>
+                  <div class="clip-card">
+                    <div class="clip-icon">Aa</div>
+                    <div>
+                      <strong>Install AirCopy on both Macs.</strong>
+                      <p>Restored from history and ready to paste.</p>
+                    </div>
+                    <span class="status-dot"></span>
+                  </div>
+                  <div class="clip-card image-card">
+                    <div class="image-preview"></div>
+                    <div>
+                      <strong>Screenshot.png</strong>
+                      <p>Synced nearby in under a second.</p>
+                    </div>
+                    <span class="copy-chip">Copied</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="AirCopy stats">
+          <article>
+            <strong>2-step setup</strong>
+            <span>Install and allow local network access.</span>
+          </article>
+          <article>
+            <strong>Text + images</strong>
+            <span>Copy rich clipboard content between machines.</span>
+          </article>
+          <article>
+            <strong>Recent history</strong>
+            <span>Restore the last three clips instantly.</span>
+          </article>
+        </section>
+
+        <section class="features" id="features">
+          <div class="section-heading">
+            <p class="eyebrow">Why AirCopy</p>
+            <h2>Built for fast, local clipboard handoff.</h2>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <h3>Works across your Macs</h3>
+              <p>
+                Install AirCopy on every Mac you use. Once they discover each
+                other, copy and paste flows naturally.
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>No shared Apple account</h3>
+              <p>
+                AirCopy does not depend on Universal Clipboard or iCloud.
+                Nearby peer discovery is enough.
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>Image support included</h3>
+              <p>
+                Screenshots, copied images, and text clips all stay available
+                in the app and the menu bar.
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>Quick verification</h3>
+              <p>
+                Check peers, recent items, and restore any of the last three
+                clips without digging through settings.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="steps" id="how-it-works">
+          <div class="section-heading">
+            <p class="eyebrow">How it works</p>
+            <h2>Simple enough to forget it is there.</h2>
+          </div>
+          <div class="step-list">
+            <article class="step-card">
+              <span>01</span>
+              <h3>Install AirCopy</h3>
+              <p>Run it on each Mac you want in your clipboard loop.</p>
+            </article>
+            <article class="step-card">
+              <span>02</span>
+              <h3>Allow local discovery</h3>
+              <p>Approve the macOS network prompt once on each machine.</p>
+            </article>
+            <article class="step-card">
+              <span>03</span>
+              <h3>Copy anywhere</h3>
+              <p>Copy text or images on one Mac and paste on the other.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="privacy" id="privacy">
+          <div class="privacy-card">
+            <p class="eyebrow">Privacy</p>
+            <h2>Your clipboard stays between your Macs.</h2>
+            <p>
+              AirCopy is designed around local discovery and direct peer sync.
+              It is meant for nearby devices you control, not a cloud clipboard
+              service.
+            </p>
+          </div>
+        </section>
+
+        <section class="install" id="install">
+          <div class="install-card">
+            <div>
+              <p class="eyebrow">Install</p>
+              <h2>Drop AirCopy onto every Mac you use.</h2>
+              <p>
+                Launch it, keep it running, and your clipboard is shared across
+                your machines without any Apple account requirement.
+              </p>
+            </div>
+            <a class="button button-primary" href="https://github.com/" data-github-link>
+              View on GitHub
+            </a>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+</html>
