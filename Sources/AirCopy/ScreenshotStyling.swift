@@ -143,6 +143,8 @@ enum ScreenshotOutputSizePreset: String, CaseIterable, Codable, Identifiable {
 
 struct ScreenshotStyleSettings: Codable, Hashable {
     var isEnabled = false
+    var importSystemScreenshots = false
+    var watchedFolderPath: String? = nil
     var backgroundPreset: ScreenshotBackgroundPreset = .aurora
     var aspectRatioPreset: ScreenshotAspectRatioPreset = .automatic
     var outputSizePreset: ScreenshotOutputSizePreset = .automatic

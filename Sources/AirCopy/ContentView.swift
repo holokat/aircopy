@@ -649,6 +649,42 @@ private struct AirCopySettingsView: View {
                 }
             }
 
+            settingsGroup(title: "Standard macOS Screenshots", subtitle: "Make normal screenshot shortcuts behave like clipboard items inside AirCopy.") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Import standard screenshots from macOS", isOn: $coordinator.screenshotStyleSettings.importSystemScreenshots)
+
+                    Text("When enabled, AirCopy watches your screenshot folder, turns new `Cmd+Shift+4` captures into clipboard images, and syncs them to your trusted Macs.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Watched Folder")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                        Text(coordinator.screenshotWatchFolderDisplayPath)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                            .textSelection(.enabled)
+
+                        HStack(spacing: 8) {
+                            settingsActionButton("Choose Folder", systemImage: "folder") {
+                                coordinator.chooseScreenshotWatchFolder()
+                            }
+
+                            settingsActionButton("Use macOS Default", systemImage: "arrow.uturn.backward") {
+                                coordinator.resetScreenshotWatchFolderToSystemDefault()
+                            }
+
+                            settingsActionButton("Open Folder", systemImage: "arrow.up.right.square") {
+                                coordinator.openScreenshotWatchFolder()
+                            }
+                        }
+                    }
+                }
+            }
+
             settingsGroup(title: "Preview", subtitle: "A live sample of the treatment you are building.") {
                 ScreenshotStylePreviewCard(
                     image: coordinator.screenshotStylePreviewImage,
