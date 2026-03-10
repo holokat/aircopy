@@ -189,12 +189,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     var connectedPeerCount: Int {
-        peerDevices.filter(\.isConnected).count
+        connectedDeviceIDs.count
     }
 
     var connectedPeerLabels: [String] {
         peerDevices
-            .filter(\.isConnected)
+            .filter { connectedDeviceIDs.contains($0.id) }
             .map(\.displayName)
             .sorted()
     }
@@ -212,7 +212,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     var trustedConnectedPeers: [PeerDeviceState] {
-        peerDevices.filter { $0.isConnected && $0.trustState == .trusted }
+        peerDevices.filter { connectedDeviceIDs.contains($0.id) && $0.trustState == .trusted }
     }
 
     var menuBarSymbolName: String {
@@ -595,7 +595,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         sendOnly: Bool = false
     ) {
         let targets = targetDeviceIDs.compactMap { deviceID -> (String, PeerDeviceState, MCPeerID)? in
-            guard let state = peerStateByID[deviceID], let peer = peerIDByDeviceID[deviceID], state.isConnected else { return nil }
+            guard let state = peerStateByID[deviceID], let peer = peerIDByDeviceID[deviceID] else { return nil }
+            guard connectedDeviceIDs.contains(deviceID) || session.connectedPeers.contains(peer) else { return nil }
             return (deviceID, state, peer)
         }
 
@@ -949,6 +950,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func refreshPeerDevices() {
+        reconcileConnectionStates()
         peerDevices = peerStateByID.values.sorted { lhs, rhs in
             if lhs.isConnected != rhs.isConnected {
                 return lhs.isConnected && !rhs.isConnected
@@ -963,6 +965,22 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             }
 
             return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    private var connectedDeviceIDs: Set<String> {
+        Set(
+            session.connectedPeers.map { peer in
+                peerDisplayNameToDeviceID[peer.displayName] ?? peer.displayName
+            }
+        )
+    }
+
+    private func reconcileConnectionStates() {
+        let connectedIDs = connectedDeviceIDs
+
+        for id in peerStateByID.keys {
+            peerStateByID[id]?.isConnected = connectedIDs.contains(id)
         }
     }
 
@@ -1473,7 +1491,6 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
             let resolvedID = self.peerDisplayNameToDeviceID[peerName] ?? peerName
             self.updatePeer(deviceID: resolvedID) { peer in
                 peer.isDiscovered = false
-                peer.isConnected = false
             }
             self.refreshPeerDevices()
         }
