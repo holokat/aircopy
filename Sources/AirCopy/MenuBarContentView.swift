@@ -20,7 +20,10 @@ struct MenuBarContentView: View {
 
         Divider()
 
-        Toggle(isOn: $coordinator.syncEnabled) {
+        Toggle(isOn: Binding(
+            get: { coordinator.syncEnabled },
+            set: { coordinator.setSyncToAllEnabled($0) }
+        )) {
             menuRowLabel(coordinator.syncEnabled ? "Sync to All On" : "Sync to All Off", systemImage: "bolt.horizontal.circle")
         }
 

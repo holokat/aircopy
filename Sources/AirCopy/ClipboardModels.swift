@@ -547,6 +547,7 @@ struct PeerDeviceState: Identifiable, Hashable {
     var trustState: PeerTrustState
     var isDiscovered: Bool
     var isConnected: Bool
+    var isAutoSyncEnabled: Bool
     var lastSeenAt: Date?
     var lastSyncAt: Date?
     var lastReceiptState: DeliveryState?

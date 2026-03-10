@@ -86,6 +86,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var peerStateByID: [String: PeerDeviceState] = [:]
     private var trustedDeviceIDs: Set<String>
     private var blockedDeviceIDs: Set<String>
+    private var autoSyncDisabledDeviceIDs: Set<String>
     private var pinnedFingerprints: Set<String>
     private var favoriteFingerprints: Set<String>
     private var excludedAppMap: [String: String]
@@ -105,6 +106,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static let temporarySyncUntilKey = "temporary-sync-until"
     private static let trustedDeviceIDsKey = "trusted-device-ids"
     private static let blockedDeviceIDsKey = "blocked-device-ids"
+    private static let autoSyncDisabledDeviceIDsKey = "auto-sync-disabled-device-ids"
     private static let pinnedFingerprintsKey = "pinned-fingerprints"
     private static let favoriteFingerprintsKey = "favorite-fingerprints"
     private static let excludedAppsKey = "excluded-app-map"
@@ -127,6 +129,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.temporarySyncUntil = defaults.object(forKey: Self.temporarySyncUntilKey) as? Date
         self.trustedDeviceIDs = Self.loadStringSet(forKey: Self.trustedDeviceIDsKey)
         self.blockedDeviceIDs = Self.loadStringSet(forKey: Self.blockedDeviceIDsKey)
+        self.autoSyncDisabledDeviceIDs = Self.loadStringSet(forKey: Self.autoSyncDisabledDeviceIDsKey)
         self.pinnedFingerprints = Self.loadStringSet(forKey: Self.pinnedFingerprintsKey)
         self.favoriteFingerprints = Self.loadStringSet(forKey: Self.favoriteFingerprintsKey)
         self.excludedAppMap = Self.loadStringDictionary(forKey: Self.excludedAppsKey)
@@ -215,6 +218,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         peerDevices.filter { connectedDeviceIDs.contains($0.id) && $0.trustState == .trusted }
     }
 
+    var autoSyncPeers: [PeerDeviceState] {
+        trustedConnectedPeers.filter(\.isAutoSyncEnabled)
+    }
+
     var menuBarSymbolName: String {
         guard let latestClipboardItem else {
             return connectedPeerCount > 0 ? "doc.on.clipboard.fill" : "doc.on.clipboard"
@@ -235,7 +242,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return "On for \(minutes)m"
         }
 
-        return "Always on"
+        let trustedCount = peerDevices.filter { $0.trustState == .trusted }.count
+        let enabledCount = peerDevices.filter { $0.trustState == .trusted && $0.isAutoSyncEnabled }.count
+
+        if trustedCount > 0, enabledCount < trustedCount {
+            return "\(enabledCount) of \(trustedCount) Macs"
+        }
+
+        return "All trusted Macs"
     }
 
     var customExclusionCount: Int {
@@ -266,7 +280,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         playSelectionSound()
 
         if syncEnabled {
-            sendPayload(item.payload, toDeviceIDs: trustedConnectedPeers.map(\.id), historyItemID: item.id)
+            sendPayload(item.payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
         }
     }
 
@@ -303,6 +317,16 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         syncEnabled = true
         temporarySyncUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
         statusText = "Sync enabled for \(minutes) minutes."
+    }
+
+    func setSyncToAllEnabled(_ enabled: Bool) {
+        if enabled {
+            temporarySyncUntil = nil
+            enableAutoSyncForAllTrustedDevices()
+            syncEnabled = true
+        } else {
+            syncEnabled = false
+        }
     }
 
     func cancelTemporarySync() {
@@ -368,6 +392,31 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         sortAndTrimHistory()
     }
 
+    func setAutoSyncEnabled(_ enabled: Bool, for deviceID: String) {
+        guard trustedDeviceIDs.contains(deviceID) else { return }
+
+        if enabled {
+            autoSyncDisabledDeviceIDs.remove(deviceID)
+        } else {
+            autoSyncDisabledDeviceIDs.insert(deviceID)
+        }
+
+        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
+        updatePeer(deviceID: deviceID) { peer in
+            peer.isAutoSyncEnabled = enabled
+        }
+        refreshPeerDevices()
+
+        let deviceName = peerStateByID[deviceID]?.displayName ?? "device"
+        statusText = enabled
+            ? "Auto-sync enabled for \(deviceName)."
+            : "Auto-sync paused for \(deviceName). Manual send stays available."
+    }
+
+    func isAutoSyncEnabled(for deviceID: String) -> Bool {
+        autoSyncEnabledState(for: deviceID)
+    }
+
     func openLatestImage() {
         guard let item = latestImageItem else {
             statusText = "No image available to open."
@@ -395,8 +444,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     func trustPeer(_ deviceID: String) {
         trustedDeviceIDs.insert(deviceID)
         blockedDeviceIDs.remove(deviceID)
+        autoSyncDisabledDeviceIDs.remove(deviceID)
         saveStringSet(trustedDeviceIDs, key: Self.trustedDeviceIDsKey)
         saveStringSet(blockedDeviceIDs, key: Self.blockedDeviceIDsKey)
+        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
         updateTrustState(for: deviceID, to: .trusted)
         inviteIfPossible(deviceID: deviceID)
         statusText = "Trusted \(peerStateByID[deviceID]?.displayName ?? "device")."
@@ -405,8 +456,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     func blockPeer(_ deviceID: String) {
         blockedDeviceIDs.insert(deviceID)
         trustedDeviceIDs.remove(deviceID)
+        autoSyncDisabledDeviceIDs.remove(deviceID)
         saveStringSet(blockedDeviceIDs, key: Self.blockedDeviceIDsKey)
         saveStringSet(trustedDeviceIDs, key: Self.trustedDeviceIDsKey)
+        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
         updateTrustState(for: deviceID, to: .blocked)
 
         if let peer = peerIDByDeviceID[deviceID] {
@@ -585,7 +638,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return
         }
 
-        sendPayload(payload, toDeviceIDs: trustedConnectedPeers.map(\.id), historyItemID: item.id)
+        sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
     }
 
     private func sendPayload(
@@ -945,7 +998,21 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private func updateTrustState(for deviceID: String, to trustState: PeerTrustState) {
         updatePeer(deviceID: deviceID) { peer in
             peer.trustState = trustState
+            peer.isAutoSyncEnabled = autoSyncEnabledState(for: deviceID, trustState: trustState)
         }
+        refreshPeerDevices()
+    }
+
+    private func enableAutoSyncForAllTrustedDevices() {
+        autoSyncDisabledDeviceIDs.subtract(trustedDeviceIDs)
+        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
+
+        for deviceID in trustedDeviceIDs {
+            updatePeer(deviceID: deviceID) { peer in
+                peer.isAutoSyncEnabled = true
+            }
+        }
+
         refreshPeerDevices()
     }
 
@@ -1004,6 +1071,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                     trustState: trustState(for: providedDeviceID),
                     isDiscovered: discovered ?? temporaryPeer.isDiscovered,
                     isConnected: connected ?? temporaryPeer.isConnected,
+                    isAutoSyncEnabled: autoSyncEnabledState(for: providedDeviceID, trustState: trustState(for: providedDeviceID)),
                     lastSeenAt: Date(),
                     lastSyncAt: temporaryPeer.lastSyncAt,
                     lastReceiptState: temporaryPeer.lastReceiptState,
@@ -1024,6 +1092,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             trustState: trustState(for: resolvedID),
             isDiscovered: discovered ?? current?.isDiscovered ?? false,
             isConnected: connected ?? current?.isConnected ?? false,
+            isAutoSyncEnabled: autoSyncEnabledState(
+                for: resolvedID,
+                trustState: trustState(for: resolvedID)
+            ),
             lastSeenAt: Date(),
             lastSyncAt: current?.lastSyncAt,
             lastReceiptState: current?.lastReceiptState,
@@ -1047,6 +1119,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return requireDeviceApproval ? .pending : .trusted
+    }
+
+    private func autoSyncEnabledState(for deviceID: String, trustState: PeerTrustState? = nil) -> Bool {
+        let resolvedTrustState = trustState ?? self.trustState(for: deviceID)
+        guard resolvedTrustState == .trusted else { return false }
+        return !autoSyncDisabledDeviceIDs.contains(deviceID)
     }
 
     private func shouldSuppressSync(for payload: ClipboardPayload) -> Bool {
@@ -1524,7 +1602,10 @@ extension AirCopyCoordinator: MCSessionDelegate {
             case .connected:
                 self.statusText = "Connected to \(peerName)."
 
-                if trustState == .trusted, let payload = self.lastKnownPayload, self.syncEnabled {
+                if trustState == .trusted,
+                   self.isAutoSyncEnabled(for: resolvedID),
+                   let payload = self.lastKnownPayload,
+                   self.syncEnabled {
                     self.sendPayload(payload, toDeviceIDs: [resolvedID], historyItemID: self.latestClipboardItem?.id)
                 }
             case .connecting:

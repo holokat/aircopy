@@ -20,10 +20,9 @@ struct ContentView: View {
             get: { coordinator.syncEnabled && coordinator.temporarySyncUntil == nil },
             set: { newValue in
                 if newValue {
-                    coordinator.syncEnabled = true
-                    coordinator.cancelTemporarySync()
+                    coordinator.setSyncToAllEnabled(true)
                 } else {
-                    coordinator.syncEnabled = false
+                    coordinator.setSyncToAllEnabled(false)
                 }
             }
         )
@@ -307,8 +306,13 @@ private struct MainPeerCard: View {
                         Text(peer.displayName)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                            .lineLimit(1)
 
                         Spacer(minLength: 8)
+
+                        if peer.trustState == .trusted {
+                            autoSyncToggle
+                        }
 
                         if showsManageButton {
                             settingsIconButton
@@ -369,13 +373,21 @@ private struct MainPeerCard: View {
                 }
             }
 
-            if let lastReceiptText = peer.lastReceiptText, !lastReceiptText.isEmpty {
-                Text(lastReceiptText)
+            if let statusDetail {
+                Text(statusDetail)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
                     .lineLimit(2)
             }
         }
+    }
+
+    private var statusDetail: String? {
+        if peer.trustState == .trusted, !peer.isAutoSyncEnabled {
+            return "Manual only"
+        }
+
+        return peer.lastReceiptText
     }
 
     private var showsManageButton: Bool {
@@ -397,6 +409,22 @@ private struct MainPeerCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open device settings")
+    }
+
+    private var autoSyncToggle: some View {
+        Toggle("Include \(peer.displayName) in auto-sync", isOn: autoSyncBinding)
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .controlSize(.small)
+            .tint(AirCopyTheme.syncTint(for: colorScheme))
+            .accessibilityLabel("Include \(peer.displayName) in auto-sync")
+    }
+
+    private var autoSyncBinding: Binding<Bool> {
+        Binding(
+            get: { peer.isAutoSyncEnabled },
+            set: { coordinator.setAutoSyncEnabled($0, for: peer.id) }
+        )
     }
 
     private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -580,7 +608,13 @@ private struct AirCopySettingsView: View {
 
         case .sync:
             settingsGroup(title: "Sync Behavior", subtitle: "Primary sync decisions belong here, not in the main workspace.") {
-                Toggle("Sync clipboard to all trusted Macs", isOn: $coordinator.syncEnabled)
+                Toggle(
+                    "Sync clipboard to all trusted Macs",
+                    isOn: Binding(
+                        get: { coordinator.syncEnabled },
+                        set: { coordinator.setSyncToAllEnabled($0) }
+                    )
+                )
                     .tint(AirCopyTheme.syncTint(for: colorScheme))
                 Toggle("Sync images", isOn: $coordinator.imageSyncEnabled)
 
