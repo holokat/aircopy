@@ -14,6 +14,8 @@ INFO_PLIST="$ROOT_DIR/Resources/Info.plist"
 MODULE_CACHE="/tmp/aircopy-clang-cache"
 ICONSET_DIR="$DIST_DIR/AirCopy.iconset"
 ICON_FILE="$RESOURCES_DIR/AirCopy.icns"
+WEBSITE_ASSETS_DIR="$ROOT_DIR/website/assets"
+WEBSITE_DOWNLOADS_DIR="$ROOT_DIR/website/downloads"
 
 mkdir -p "$MODULE_CACHE"
 mkdir -p "$DIST_DIR"
@@ -80,7 +82,13 @@ rm -f "$ZIP_PATH"
 echo "Creating zip archive..."
 ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
 
+echo "Syncing website assets..."
+mkdir -p "$WEBSITE_ASSETS_DIR" "$WEBSITE_DOWNLOADS_DIR"
+cp "$ROOT_DIR/Resources/1024.png" "$WEBSITE_ASSETS_DIR/aircopy-logo.png"
+cp "$ZIP_PATH" "$WEBSITE_DOWNLOADS_DIR/$APP_NAME-macOS.zip"
+
 echo
 echo "Created:"
 echo "  $APP_DIR"
 echo "  $ZIP_PATH"
+echo "  $WEBSITE_DOWNLOADS_DIR/$APP_NAME-macOS.zip"

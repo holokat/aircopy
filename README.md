@@ -1,30 +1,13 @@
 # AirCopy
 
-Install AirCopy on every Mac you want to copy and paste between, and they will sync clipboard text and images directly.
+AirCopy lets you copy on one Mac and paste on another.
 
-You do not need to be on the same Apple account.
+## How to use
 
-## Install
+1. Install AirCopy on every Mac you want to use it on.
+2. Open AirCopy and turn on Sync.
+3. Allow Local Network access when macOS asks.
+4. Keep AirCopy running on each Mac.
+5. Copy on one Mac and paste on another.
 
-1. Install and open AirCopy on each Mac.
-2. Allow Local Network access when macOS prompts.
-3. Keep AirCopy running on both machines.
-4. Copy on one Mac and paste on the other.
-
-## What it syncs
-
-- Text
-- Images
-- Recent clipboard history
-
-## Build
-
-```bash
-swift run
-```
-
-## Package
-
-```bash
-./scripts/package-app.sh
-```
+AirCopy syncs text, images, and recent clipboard history between nearby Macs you control.
