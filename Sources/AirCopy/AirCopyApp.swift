@@ -9,7 +9,7 @@ struct AirCopyApp: App {
             ContentView()
                 .environmentObject(coordinator)
                 .preferredColorScheme(coordinator.effectiveColorScheme)
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: 1080, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)

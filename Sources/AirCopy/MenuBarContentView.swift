@@ -3,7 +3,7 @@ import SwiftUI
 struct MenuBarContentView: View {
     @EnvironmentObject private var coordinator: AirCopyCoordinator
 
-    private let rowWidth: CGFloat = 248
+    private let rowWidth: CGFloat = 268
 
     var body: some View {
         Button {
@@ -18,36 +18,94 @@ struct MenuBarContentView: View {
             menuRowLabel(coordinator.syncEnabled ? "Clipboard Sync On" : "Clipboard Sync Off", systemImage: "bolt.horizontal.circle")
         }
 
-        Button {
-            coordinator.clearClipboard()
-        } label: {
-            menuRowLabel("Clear Current Clipboard", systemImage: "trash")
+        Toggle(isOn: $coordinator.imageSyncEnabled) {
+            menuRowLabel(coordinator.imageSyncEnabled ? "Image Sync On" : "Image Sync Paused", systemImage: "photo")
         }
 
         Button {
-            coordinator.clearHistory()
+            coordinator.startTemporarySync()
         } label: {
-            menuRowLabel("Clear Clip History", systemImage: "xmark.bin")
+            menuRowLabel("Sync for 10 Minutes", systemImage: "timer")
+        }
+
+        Divider()
+
+        if let latest = coordinator.latestClipboardItem {
+            Button {
+                coordinator.restoreHistoryItem(latest)
+            } label: {
+                menuRowLabel("Copy Latest Again", systemImage: "doc.on.doc")
+            }
+
+            if latest.kind == .image {
+                Button {
+                    coordinator.openImage(for: latest)
+                } label: {
+                    menuRowLabel("Open Latest Image", systemImage: "photo.on.rectangle")
+                }
+            }
+
+            Menu("Send Latest To") {
+                if coordinator.trustedConnectedPeers.isEmpty {
+                    Text("No trusted connected Macs")
+                } else {
+                    ForEach(coordinator.trustedConnectedPeers) { peer in
+                        Button(peer.displayName) {
+                            coordinator.sendCurrentClipboard(to: peer.id)
+                        }
+                    }
+                }
+            }
+
+            Button(latest.isPinned ? "Unpin Latest Item" : "Pin Latest Item") {
+                coordinator.togglePin(for: latest)
+            }
+
+            Button(latest.isFavorite ? "Unfavorite Latest Item" : "Favorite Latest Item") {
+                coordinator.toggleFavorite(for: latest)
+            }
+        } else {
+            statusMenuRow("No latest item yet", symbol: "square.stack.3d.up.slash")
         }
 
         Divider()
 
         statusMenuRow("This Mac: \(coordinator.localDeviceName)", symbol: "desktopcomputer")
-        statusMenuRow("Nearby Macs: \(coordinator.discoveredPeerCount)", symbol: "dot.radiowaves.left.and.right")
-        statusMenuRow("Connected Peers: \(coordinator.connectedPeerCount)", symbol: "link")
+        statusMenuRow("Trusted peers: \(coordinator.connectedPeerCount)", symbol: "checkmark.shield")
+        statusMenuRow("Sync: \(coordinator.syncModeSummary)", symbol: "clock.arrow.circlepath")
+
+        if let firstPending = coordinator.peerDevices.first(where: { $0.trustState == .pending }) {
+            Button("Trust \(firstPending.displayName)") {
+                coordinator.trustPeer(firstPending.id)
+            }
+        }
 
         Divider()
 
-        if coordinator.clipboardHistory.isEmpty {
-            statusMenuRow("No recent clips yet", symbol: "square.stack.3d.up.slash")
-        } else {
-            ForEach(coordinator.clipboardHistory) { item in
-                Button {
-                    coordinator.restoreHistoryItem(item)
-                } label: {
-                    clipMenuRow(item)
+        Menu("Recent Clips") {
+            if coordinator.clipboardHistory.isEmpty {
+                Text("No recent clips yet")
+            } else {
+                ForEach(coordinator.clipboardHistory.prefix(8)) { item in
+                    Button(item.title) {
+                        coordinator.restoreHistoryItem(item)
+                    }
                 }
             }
+        }
+
+        Divider()
+
+        Button {
+            coordinator.clearClipboard()
+        } label: {
+            menuRowLabel("Clear Only This Device", systemImage: "trash")
+        }
+
+        Button {
+            coordinator.clearHistory()
+        } label: {
+            menuRowLabel("Clear Local History", systemImage: "xmark.bin")
         }
 
         Divider()
@@ -58,48 +116,14 @@ struct MenuBarContentView: View {
     }
 
     private func statusMenuRow(_ text: String, symbol: String) -> some View {
-        Button {
-            coordinator.showMainWindow()
-        } label: {
-            Label {
-                Text(text)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: rowWidth - 28, alignment: .leading)
-            } icon: {
-                Image(systemName: symbol)
-                    .frame(width: 16)
-            }
-            .frame(width: rowWidth, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func clipLeadingView(_ item: ClipboardHistoryItem) -> some View {
-        if let image = item.image {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 28, height: 28)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        } else {
-            Image(systemName: item.symbolName)
-                .frame(width: 28, height: 28)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-    }
-
-    private func clipMenuRow(_ item: ClipboardHistoryItem) -> some View {
-        HStack(spacing: 10) {
-            clipLeadingView(item)
-
-            Text(item.title)
+        Label {
+            Text(text)
                 .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: rowWidth - 44, alignment: .leading)
-
-            Spacer(minLength: 0)
+                .truncationMode(.tail)
+                .frame(maxWidth: rowWidth - 28, alignment: .leading)
+        } icon: {
+            Image(systemName: symbol)
+                .frame(width: 16)
         }
         .frame(width: rowWidth, alignment: .leading)
     }

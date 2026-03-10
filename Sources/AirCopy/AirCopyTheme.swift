@@ -65,6 +65,30 @@ enum AirCopyTheme {
             : Color(red: 0.30, green: 0.84, blue: 0.50)
     }
 
+    static func warning(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .light
+            ? Color(red: 0.82, green: 0.51, blue: 0.17)
+            : Color(red: 0.94, green: 0.74, blue: 0.35)
+    }
+
+    static func error(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .light
+            ? Color(red: 0.80, green: 0.25, blue: 0.28)
+            : Color(red: 0.96, green: 0.42, blue: 0.46)
+    }
+
+    static func highlight(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .light
+            ? Color(red: 0.45, green: 0.34, blue: 0.80)
+            : Color(red: 0.75, green: 0.66, blue: 1.00)
+    }
+
+    static func codeBlockFill(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .light
+            ? Color(red: 0.18, green: 0.20, blue: 0.27)
+            : Color(red: 0.12, green: 0.13, blue: 0.16)
+    }
+
     static func buttonTint(for colorScheme: ColorScheme) -> Color {
         colorScheme == .light
             ? Color(red: 0.27, green: 0.36, blue: 0.48)
