@@ -554,6 +554,19 @@ struct PeerDeviceState: Identifiable, Hashable {
     var lastClipboardSummary: String?
     var encryptedTransport: Bool
 
+    var deviceSymbolName: String {
+        let normalizedName = displayName.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
+
+        if normalizedName.contains("macbook") || normalizedName.contains("laptop") || normalizedName.contains("notebook") {
+            return "laptopcomputer"
+        }
+
+        return "desktopcomputer"
+    }
+
     var statusSummary: String {
         if isConnected {
             return trustState == .trusted ? "Connected" : trustState.title

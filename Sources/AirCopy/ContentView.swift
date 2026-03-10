@@ -297,7 +297,7 @@ private struct MainPeerCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: iconName)
+                Image(systemName: peer.deviceSymbolName)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(iconColor)
                     .frame(width: 18)
@@ -315,10 +315,7 @@ private struct MainPeerCard: View {
                         }
                     }
 
-                    Text(statusLine)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                        .lineLimit(2)
+                    statusBlock
                 }
             }
 
@@ -347,21 +344,10 @@ private struct MainPeerCard: View {
         .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var iconName: String {
-        switch peer.trustState {
-        case .trusted:
-            return peer.isConnected ? "checkmark.shield.fill" : "desktopcomputer"
-        case .pending:
-            return "questionmark.shield"
-        case .blocked:
-            return "hand.raised.fill"
-        }
-    }
-
     private var iconColor: Color {
         switch peer.trustState {
         case .trusted:
-            return peer.isConnected ? AirCopyTheme.success(for: colorScheme) : AirCopyTheme.accent(for: colorScheme)
+            return AirCopyTheme.accent(for: colorScheme)
         case .pending:
             return AirCopyTheme.warning(for: colorScheme)
         case .blocked:
@@ -369,12 +355,27 @@ private struct MainPeerCard: View {
         }
     }
 
-    private var statusLine: String {
-        if let lastReceiptText = peer.lastReceiptText, !lastReceiptText.isEmpty {
-            return "\(peer.statusSummary) • \(lastReceiptText)"
-        }
+    private var statusBlock: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Text(peer.statusSummary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
 
-        return peer.statusSummary
+                if peer.trustState == .trusted, peer.isConnected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.success(for: colorScheme))
+                }
+            }
+
+            if let lastReceiptText = peer.lastReceiptText, !lastReceiptText.isEmpty {
+                Text(lastReceiptText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                    .lineLimit(2)
+            }
+        }
     }
 
     private var showsManageButton: Bool {
@@ -740,7 +741,7 @@ private struct SettingsPeerRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: peer.isConnected ? "desktopcomputer.and.arrow.down" : "desktopcomputer")
+            Image(systemName: peer.deviceSymbolName)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(iconColor)
                 .frame(width: 18)
@@ -749,9 +750,17 @@ private struct SettingsPeerRow: View {
                 Text(peer.displayName)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-                Text(peer.statusSummary)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                HStack(spacing: 4) {
+                    Text(peer.statusSummary)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+
+                    if peer.trustState == .trusted, peer.isConnected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.success(for: colorScheme))
+                    }
+                }
             }
 
             Spacer()
@@ -787,7 +796,7 @@ private struct SettingsPeerRow: View {
     private var iconColor: Color {
         switch peer.trustState {
         case .trusted:
-            return peer.isConnected ? AirCopyTheme.success(for: colorScheme) : AirCopyTheme.accent(for: colorScheme)
+            return AirCopyTheme.accent(for: colorScheme)
         case .pending:
             return AirCopyTheme.warning(for: colorScheme)
         case .blocked:
