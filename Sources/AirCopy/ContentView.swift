@@ -274,9 +274,17 @@ private struct MainPeerCard: View {
                     .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(peer.displayName)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                    HStack(spacing: 8) {
+                        Text(peer.displayName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                        Spacer(minLength: 8)
+
+                        if showsManageButton {
+                            settingsIconButton
+                        }
+                    }
 
                     Text(statusLine)
                         .font(.system(size: 11, weight: .medium))
@@ -300,13 +308,8 @@ private struct MainPeerCard: View {
                             coordinator.sendCurrentClipboard(to: peer.id)
                         }
                     }
-                    actionButton("Manage", systemImage: "gearshape") {
-                        coordinator.showSettings()
-                    }
                 case .blocked:
-                    actionButton("Manage", systemImage: "gearshape") {
-                        coordinator.showSettings()
-                    }
+                    EmptyView()
                 }
             }
         }
@@ -343,6 +346,27 @@ private struct MainPeerCard: View {
         }
 
         return peer.statusSummary
+    }
+
+    private var showsManageButton: Bool {
+        switch peer.trustState {
+        case .trusted, .blocked:
+            return true
+        case .pending:
+            return false
+        }
+    }
+
+    private var settingsIconButton: some View {
+        Button(action: coordinator.showSettings) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                .frame(width: 26, height: 26)
+                .background(Color.white.opacity(colorScheme == .light ? 0.82 : 0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open device settings")
     }
 
     private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
