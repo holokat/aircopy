@@ -53,6 +53,7 @@ struct ContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 sidebarHeader
+                syncControlPanel
 
                 if !pendingPeers.isEmpty {
                     deviceSection(
@@ -115,30 +116,6 @@ struct ContentView: View {
                 }
             }
 
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Sync to All")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-
-                    Text(coordinator.syncModeSummary)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(
-                            coordinator.syncEnabled
-                                ? AirCopyTheme.syncTint(for: colorScheme)
-                                : AirCopyTheme.secondaryText(for: colorScheme)
-                        )
-                }
-
-                Spacer()
-
-                Toggle("Sync to All", isOn: alwaysSyncBinding)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .tint(AirCopyTheme.syncTint(for: colorScheme))
-            }
-
             HStack(spacing: 8) {
                 miniStat(title: "Trusted", value: "\(trustedPeers.count)")
                 miniStat(title: "History", value: "\(coordinator.clipboardHistory.count)")
@@ -159,6 +136,34 @@ struct ContentView: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
+    }
+
+    private var syncControlPanel: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sync to All")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                Text(coordinator.syncModeSummary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(
+                        coordinator.syncEnabled
+                            ? AirCopyTheme.syncTint(for: colorScheme)
+                            : AirCopyTheme.secondaryText(for: colorScheme)
+                    )
+            }
+
+            Spacer()
+
+            Toggle("Sync to All", isOn: alwaysSyncBinding)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .tint(AirCopyTheme.syncTint(for: colorScheme))
+        }
+        .padding(14)
+        .airCopyPanel(cornerRadius: 16)
     }
 
     private var historyPanel: some View {
