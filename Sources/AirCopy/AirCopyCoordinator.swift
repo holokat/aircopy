@@ -33,6 +33,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
+    @Published var screenshotStyleSettings = ScreenshotStyleSettings() {
+        didSet {
+            persistScreenshotStyleSettings()
+        }
+    }
+
     @Published var saveReceivedItemsToDiskEnabled = false {
         didSet {
             UserDefaults.standard.set(saveReceivedItemsToDiskEnabled, forKey: Self.saveReceivedItemsToDiskEnabledKey)
@@ -136,6 +142,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
+    private static let screenshotStyleSettingsKey = "screenshot-style-settings"
     private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
     private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
     private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
@@ -157,12 +164,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let storedAppearance = defaults.string(forKey: Self.appearancePreferenceKey)
         let appearance = AppearancePreference(rawValue: storedAppearance ?? "") ?? .automatic
         let frontmost = Self.frontmostApplicationInfo()
+        let loadedScreenshotStyleSettings = Self.loadScreenshotStyleSettings(forKey: Self.screenshotStyleSettingsKey)
 
         self.localDeviceName = resolvedName
         self.appearancePreference = appearance
         self.deviceID = Self.loadOrCreateDeviceID()
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
+        self.screenshotStyleSettings = loadedScreenshotStyleSettings
         self.saveReceivedItemsToDiskEnabled = defaults.object(forKey: Self.saveReceivedItemsToDiskEnabledKey) as? Bool ?? false
         self.saveReceivedImagesToDisk = defaults.object(forKey: Self.saveReceivedImagesToDiskKey) as? Bool ?? true
         self.saveReceivedTextToDisk = defaults.object(forKey: Self.saveReceivedTextToDiskKey) as? Bool ?? true
@@ -185,7 +194,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             from: NSPasteboard.general,
             maxInlineAttachmentBytes: 8 * 1024 * 1024,
             sourceAppBundleID: frontmost.bundleID,
-            sourceAppName: frontmost.name
+            sourceAppName: frontmost.name,
+            screenshotStyleSettings: loadedScreenshotStyleSettings
         )
         super.init()
 
@@ -304,6 +314,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         (savedItemsBaseDirectoryPath as NSString).abbreviatingWithTildeInPath
     }
 
+    var screenshotStylePreviewImage: NSImage? {
+        ScreenshotStyleRenderer.previewImage(using: screenshotStyleSettings)
+    }
+
     func filteredHistory(searchText: String, filter: HistoryFilter) -> [ClipboardHistoryItem] {
         clipboardHistory
             .filter { item in
@@ -353,7 +367,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             from: NSPasteboard.general,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
             sourceAppBundleID: frontmost.bundleID,
-            sourceAppName: frontmost.name
+            sourceAppName: frontmost.name,
+            screenshotStyleSettings: screenshotStyleSettings
         ) else {
             statusText = "Nothing sendable is in the clipboard."
             return
@@ -681,7 +696,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             from: pasteboard,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
             sourceAppBundleID: frontmost.bundleID,
-            sourceAppName: frontmost.name
+            sourceAppName: frontmost.name,
+            screenshotStyleSettings: screenshotStyleSettings
         ) else {
             lastKnownPayload = nil
             return
@@ -1459,6 +1475,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         UserDefaults.standard.set(Array(set).sorted(), forKey: key)
     }
 
+    private func persistScreenshotStyleSettings() {
+        guard let data = try? JSONEncoder().encode(screenshotStyleSettings) else { return }
+        UserDefaults.standard.set(data, forKey: Self.screenshotStyleSettingsKey)
+    }
+
     private static func loadStringSet(forKey key: String) -> Set<String> {
         let values = UserDefaults.standard.stringArray(forKey: key) ?? []
         return Set(values)
@@ -1471,6 +1492,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return map
+    }
+
+    private static func loadScreenshotStyleSettings(forKey key: String) -> ScreenshotStyleSettings {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let settings = try? JSONDecoder().decode(ScreenshotStyleSettings.self, from: data) else {
+            return ScreenshotStyleSettings()
+        }
+
+        return settings
     }
 
     private static func loadOrCreateDeviceID() -> String {
@@ -1495,12 +1525,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         from pasteboard: NSPasteboard,
         maxInlineAttachmentBytes: Int64,
         sourceAppBundleID: String?,
-        sourceAppName: String?
+        sourceAppName: String?,
+        screenshotStyleSettings: ScreenshotStyleSettings
     ) -> ClipboardPayload? {
         if let imagePayload = imagePayload(
             from: pasteboard,
             sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
+            sourceAppName: sourceAppName,
+            screenshotStyleSettings: screenshotStyleSettings
         ) {
             return imagePayload
         }
@@ -1553,7 +1585,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static func imagePayload(
         from pasteboard: NSPasteboard,
         sourceAppBundleID: String?,
-        sourceAppName: String?
+        sourceAppName: String?,
+        screenshotStyleSettings: ScreenshotStyleSettings
     ) -> ClipboardPayload? {
         guard containsDirectImagePayload(in: pasteboard),
               let imageData = pngData(from: pasteboard),
@@ -1561,8 +1594,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return nil
         }
 
+        let processedImageData = ScreenshotStyleRenderer.styledImageData(
+            from: imageData,
+            settings: screenshotStyleSettings,
+            sourceAppBundleID: sourceAppBundleID,
+            sourceAppName: sourceAppName
+        )
+
         return ClipboardPayload(
-            imageData: imageData,
+            imageData: processedImageData,
             sourceAppBundleID: sourceAppBundleID,
             sourceAppName: sourceAppName
         )
