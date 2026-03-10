@@ -6,6 +6,12 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AirCopyCoordinator: NSObject, ObservableObject {
+    private enum SaveReceivedPayloadResult {
+        case skipped
+        case saved(String)
+        case failed(String)
+    }
+
     @Published var syncEnabled = true {
         didSet {
             guard syncEnabled != oldValue else { return }
@@ -24,6 +30,30 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         didSet {
             UserDefaults.standard.set(imageSyncEnabled, forKey: Self.imageSyncEnabledKey)
             statusText = imageSyncEnabled ? "Image sync enabled." : "Image sync paused."
+        }
+    }
+
+    @Published var saveReceivedItemsToDiskEnabled = false {
+        didSet {
+            UserDefaults.standard.set(saveReceivedItemsToDiskEnabled, forKey: Self.saveReceivedItemsToDiskEnabledKey)
+        }
+    }
+
+    @Published var saveReceivedImagesToDisk = true {
+        didSet {
+            UserDefaults.standard.set(saveReceivedImagesToDisk, forKey: Self.saveReceivedImagesToDiskKey)
+        }
+    }
+
+    @Published var saveReceivedTextToDisk = true {
+        didSet {
+            UserDefaults.standard.set(saveReceivedTextToDisk, forKey: Self.saveReceivedTextToDiskKey)
+        }
+    }
+
+    @Published var saveReceivedFilesToDisk = true {
+        didSet {
+            UserDefaults.standard.set(saveReceivedFilesToDisk, forKey: Self.saveReceivedFilesToDiskKey)
         }
     }
 
@@ -49,6 +79,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var recentlyCopiedHistoryItemID: UUID?
     @Published private(set) var effectiveColorScheme: ColorScheme
     @Published private(set) var appIconImage: NSImage?
+    @Published private(set) var savedItemsBaseDirectoryPath: String
     @Published private(set) var temporarySyncUntil: Date? {
         didSet {
             if let temporarySyncUntil {
@@ -105,6 +136,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
+    private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
+    private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
+    private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
+    private static let saveReceivedFilesToDiskKey = "save-received-files-to-disk"
+    private static let savedItemsBaseDirectoryPathKey = "saved-items-base-directory-path"
     private static let temporarySyncUntilKey = "temporary-sync-until"
     private static let trustedDeviceIDsKey = "trusted-device-ids"
     private static let blockedDeviceIDsKey = "blocked-device-ids"
@@ -127,6 +163,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.deviceID = Self.loadOrCreateDeviceID()
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
+        self.saveReceivedItemsToDiskEnabled = defaults.object(forKey: Self.saveReceivedItemsToDiskEnabledKey) as? Bool ?? false
+        self.saveReceivedImagesToDisk = defaults.object(forKey: Self.saveReceivedImagesToDiskKey) as? Bool ?? true
+        self.saveReceivedTextToDisk = defaults.object(forKey: Self.saveReceivedTextToDiskKey) as? Bool ?? true
+        self.saveReceivedFilesToDisk = defaults.object(forKey: Self.saveReceivedFilesToDiskKey) as? Bool ?? true
+        self.savedItemsBaseDirectoryPath = defaults.string(forKey: Self.savedItemsBaseDirectoryPathKey)
+            ?? Self.defaultSavedItemsBaseDirectory.path
         self.requireDeviceApproval = defaults.object(forKey: Self.requireDeviceApprovalKey) as? Bool ?? true
         self.temporarySyncUntil = defaults.object(forKey: Self.temporarySyncUntilKey) as? Date
         self.trustedDeviceIDs = Self.loadStringSet(forKey: Self.trustedDeviceIDsKey)
@@ -256,6 +298,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     var customExclusionCount: Int {
         excludedApplications.count
+    }
+
+    var savedItemsDirectoryDisplayPath: String {
+        (savedItemsBaseDirectoryPath as NSString).abbreviatingWithTildeInPath
     }
 
     func filteredHistory(searchText: String, filter: HistoryFilter) -> [ClipboardHistoryItem] {
@@ -426,6 +472,33 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     func isAutoSyncEnabled(for deviceID: String) -> Bool {
         autoSyncEnabledState(for: deviceID)
+    }
+
+    func chooseSavedItemsDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose AirCopy Save Folder"
+        panel.prompt = "Choose Folder"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = savedItemsBaseDirectoryURL
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        savedItemsBaseDirectoryPath = url.path
+        UserDefaults.standard.set(savedItemsBaseDirectoryPath, forKey: Self.savedItemsBaseDirectoryPathKey)
+        statusText = "Received items will save to \(savedItemsDirectoryDisplayPath)."
+    }
+
+    func openSavedItemsDirectory() {
+        let directory = savedItemsBaseDirectoryURL
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(directory)
+        } catch {
+            statusText = "Unable to open save folder: \(error.localizedDescription)"
+        }
     }
 
     func openLatestImage() {
@@ -755,7 +828,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         sendReceipt(.clipboardUpdated, for: message, to: peer)
-        statusText = "Clipboard updated from \(message.senderName)."
+        switch saveReceivedPayloadToDiskIfNeeded(message.payload, date: message.sentAt) {
+        case .saved(let summary):
+            statusText = "Clipboard updated from \(message.senderName). \(summary)"
+        case .failed(let summary):
+            statusText = "Clipboard updated from \(message.senderName). \(summary)"
+        case .skipped:
+            statusText = "Clipboard updated from \(message.senderName)."
+        }
     }
 
     private func handleReceipt(_ receipt: ClipboardReceipt) {
@@ -1146,6 +1226,206 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let resolvedTrustState = trustState ?? self.trustState(for: deviceID)
         guard resolvedTrustState == .trusted else { return false }
         return !autoSyncDisabledDeviceIDs.contains(deviceID)
+    }
+
+    private var savedItemsBaseDirectoryURL: URL {
+        let trimmedPath = savedItemsBaseDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedPath = trimmedPath.isEmpty ? Self.defaultSavedItemsBaseDirectory.path : trimmedPath
+        return URL(fileURLWithPath: resolvedPath, isDirectory: true)
+    }
+
+    private static var defaultSavedItemsBaseDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("AirCopy", isDirectory: true)
+    }
+
+    private func saveReceivedPayloadToDiskIfNeeded(_ payload: ClipboardPayload, date: Date) -> SaveReceivedPayloadResult {
+        guard saveReceivedItemsToDiskEnabled else { return .skipped }
+
+        do {
+            switch payload.kind {
+            case .image:
+                guard saveReceivedImagesToDisk, let imageData = payload.imageData else { return .skipped }
+                let folder = try subdirectoryURL(named: "Images")
+                let stem = fileStem(from: payload.title, fallback: "Image-\(timestampString(from: date))")
+                let destination = uniqueFileURL(in: folder, preferredStem: stem, pathExtension: "png")
+                try imageData.write(to: destination, options: .atomic)
+                return .saved("Saved to Images.")
+
+            case .text, .code, .link, .browserTab:
+                guard saveReceivedTextToDisk else { return .skipped }
+                let contents = payload.plainTextRepresentation
+                guard let data = contents.data(using: .utf8), !data.isEmpty else { return .skipped }
+                let folder = try subdirectoryURL(named: "Text")
+                let stem = fileStem(from: payload.title, fallback: "Text-\(timestampString(from: date))")
+                let destination = uniqueFileURL(
+                    in: folder,
+                    preferredStem: stem,
+                    pathExtension: textFileExtension(for: payload)
+                )
+                try data.write(to: destination, options: .atomic)
+                return .saved("Saved to Text.")
+
+            case .file, .folder:
+                guard saveReceivedFilesToDisk else { return .skipped }
+                guard let summary = try saveAttachmentsToDisk(payload.attachments) else {
+                    return .skipped
+                }
+                return .saved(summary)
+            }
+        } catch {
+            return .failed("Could not save a copy: \(error.localizedDescription)")
+        }
+    }
+
+    private func saveAttachmentsToDisk(_ attachments: [ClipboardAttachment]) throws -> String? {
+        guard !attachments.isEmpty else { return nil }
+
+        let folder = try subdirectoryURL(named: "Files")
+        var savedCount = 0
+        var skippedCount = 0
+
+        for attachment in attachments {
+            if try saveAttachment(attachment, to: folder) {
+                savedCount += 1
+            } else {
+                skippedCount += 1
+            }
+        }
+
+        if savedCount == 0, skippedCount > 0 {
+            return "Some file references could not be saved."
+        }
+
+        if skippedCount > 0 {
+            return "Saved \(savedCount) file\(savedCount == 1 ? "" : "s"). Some references were skipped."
+        }
+
+        return savedCount == 1 ? "Saved to Files." : "Saved \(savedCount) files to Files."
+    }
+
+    private func saveAttachment(_ attachment: ClipboardAttachment, to folder: URL) throws -> Bool {
+        if let inlineData = attachment.inlineData, !attachment.isDirectory {
+            let destination = uniqueFileURL(
+                in: folder,
+                preferredStem: attachmentFileStem(for: attachment),
+                pathExtension: fileExtension(for: attachment)
+            )
+            try inlineData.write(to: destination, options: .atomic)
+            return true
+        }
+
+        let sourceURL = URL(fileURLWithPath: attachment.originalPath)
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            return false
+        }
+
+        let destination = uniqueFileURL(
+            in: folder,
+            preferredStem: attachment.isDirectory
+                ? attachmentDirectoryStem(for: attachment)
+                : attachmentFileStem(for: attachment),
+            pathExtension: attachment.isDirectory ? nil : fileExtension(for: attachment)
+        )
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return true
+    }
+
+    private func subdirectoryURL(named folderName: String) throws -> URL {
+        let directory = savedItemsBaseDirectoryURL.appendingPathComponent(folderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func uniqueFileURL(in directory: URL, preferredStem: String, pathExtension: String?) -> URL {
+        let stem = preferredStem.isEmpty ? "AirCopy" : preferredStem
+        let sanitizedExtension = (pathExtension ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var candidate = directory.appendingPathComponent(stem)
+        if !sanitizedExtension.isEmpty {
+            candidate.appendPathExtension(sanitizedExtension)
+        }
+
+        guard !FileManager.default.fileExists(atPath: candidate.path) else {
+            var suffix = 2
+            while true {
+                var numbered = directory.appendingPathComponent("\(stem)-\(suffix)")
+                if !sanitizedExtension.isEmpty {
+                    numbered.appendPathExtension(sanitizedExtension)
+                }
+
+                if !FileManager.default.fileExists(atPath: numbered.path) {
+                    return numbered
+                }
+
+                suffix += 1
+            }
+        }
+
+        return candidate
+    }
+
+    private func fileStem(from rawValue: String, fallback: String) -> String {
+        let cleaned = rawValue
+            .components(separatedBy: CharacterSet(charactersIn: "/:\\?%*|\"<>"))
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let base = cleaned.isEmpty ? fallback : cleaned
+        return String(base.prefix(60))
+    }
+
+    private func fileExtension(for attachment: ClipboardAttachment) -> String? {
+        if !attachment.fileExtension.isEmpty {
+            return attachment.fileExtension
+        }
+
+        if let typeIdentifier = attachment.typeIdentifier,
+           let contentType = UTType(typeIdentifier),
+           let preferredExtension = contentType.preferredFilenameExtension {
+            return preferredExtension
+        }
+
+        return nil
+    }
+
+    private func attachmentFileStem(for attachment: ClipboardAttachment) -> String {
+        let rawName = URL(fileURLWithPath: attachment.name).deletingPathExtension().lastPathComponent
+        return fileStem(from: rawName, fallback: "File")
+    }
+
+    private func attachmentDirectoryStem(for attachment: ClipboardAttachment) -> String {
+        fileStem(from: attachment.name, fallback: "Folder")
+    }
+
+    private func textFileExtension(for payload: ClipboardPayload) -> String {
+        guard payload.kind == .code else { return "txt" }
+
+        switch payload.languageHint?.lowercased() {
+        case "swift":
+            return "swift"
+        case "javascript":
+            return "js"
+        case "html":
+            return "html"
+        case "css":
+            return "css"
+        case "sql":
+            return "sql"
+        case "json":
+            return "json"
+        case "bash":
+            return "sh"
+        default:
+            return "txt"
+        }
+    }
+
+    private func timestampString(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+        return formatter.string(from: date)
     }
 
     private func shouldSuppressSync(for payload: ClipboardPayload) -> Bool {

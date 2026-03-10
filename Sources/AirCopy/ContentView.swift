@@ -587,6 +587,43 @@ private struct AirCopySettingsView: View {
                 }
             }
 
+            settingsGroup(title: "Saved Copies", subtitle: "Optionally keep received items as files on this Mac.") {
+                Toggle("Save received items to disk", isOn: $coordinator.saveReceivedItemsToDiskEnabled)
+
+                if coordinator.saveReceivedItemsToDiskEnabled {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Images", isOn: $coordinator.saveReceivedImagesToDisk)
+                        Toggle("Text", isOn: $coordinator.saveReceivedTextToDisk)
+                        Toggle("Files", isOn: $coordinator.saveReceivedFilesToDisk)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Base Folder")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                            Text(coordinator.savedItemsDirectoryDisplayPath)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                                .textSelection(.enabled)
+
+                            HStack(spacing: 8) {
+                                settingsActionButton("Choose Folder", systemImage: "folder") {
+                                    coordinator.chooseSavedItemsDirectory()
+                                }
+
+                                settingsActionButton("Open Folder", systemImage: "arrow.up.right.square") {
+                                    coordinator.openSavedItemsDirectory()
+                                }
+                            }
+
+                            Text("AirCopy creates Images, Text, and Files subfolders automatically.")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        }
+                    }
+                }
+            }
+
             settingsGroup(title: "Device", subtitle: "Read-only device context.") {
                 settingsRow(title: "This Mac", value: coordinator.localDeviceName)
                 settingsRow(title: "Frontmost App", value: coordinator.frontmostApplicationName)
