@@ -12,9 +12,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
             if syncEnabled {
                 startServices()
+                statusText = "Always Sync is on."
             } else {
                 temporarySyncUntil = nil
-                stopServices()
+                statusText = "Always Sync is off. Trusted Macs stay available for manual sends."
             }
         }
     }
@@ -223,7 +224,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     var syncModeSummary: String {
-        guard syncEnabled else { return "Off" }
+        guard syncEnabled else { return "Manual" }
 
         if let temporarySyncUntil {
             let minutes = max(1, Int(temporarySyncUntil.timeIntervalSinceNow / 60))
@@ -905,7 +906,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func inviteIfPossible(deviceID: String) {
-        guard syncEnabled else { return }
         guard trustedDeviceIDs.contains(deviceID) else { return }
         guard let peer = peerIDByDeviceID[deviceID] else { return }
         guard !session.connectedPeers.contains(peer) else { return }
@@ -1389,7 +1389,7 @@ extension AirCopyCoordinator: MCNearbyServiceAdvertiserDelegate {
             self.peerIDByDeviceID[resolvedID] = peerBox.peerID
             let trustState = self.trustState(for: resolvedID)
 
-            guard self.syncEnabled, trustState == .trusted else {
+            guard trustState == .trusted else {
                 self.statusText = trustState == .pending
                     ? "Approval required for \(peerName)."
                     : "Blocked invitation from \(peerName)."
@@ -1434,7 +1434,6 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
             )
             self.peerIDByDeviceID[resolvedID] = peerBox.peerID
 
-            guard self.syncEnabled else { return }
             guard self.trustState(for: resolvedID) == .trusted else {
                 self.statusText = "Found \(peerName). Approval needed before connecting."
                 return
