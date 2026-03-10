@@ -68,6 +68,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private let peerID: MCPeerID
     private let maxHistoryItems = 64
     private let maxInlineAttachmentBytes: Int64 = 8 * 1024 * 1024
+    private let inviteRetryInterval: TimeInterval = 3
     private let protectedPasswordManagerBundleIDs: Set<String> = [
         "com.1password.1password",
         "com.agilebits.onepassword7",
@@ -84,6 +85,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var peerIDByDeviceID: [String: MCPeerID] = [:]
     private var peerDisplayNameToDeviceID: [String: String] = [:]
     private var peerStateByID: [String: PeerDeviceState] = [:]
+    private var lastInviteAttemptByDeviceID: [String: Date] = [:]
     private var trustedDeviceIDs: Set<String>
     private var blockedDeviceIDs: Set<String>
     private var autoSyncDisabledDeviceIDs: Set<String>
@@ -992,10 +994,20 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         guard trustedDeviceIDs.contains(deviceID) else { return }
         guard let peer = peerIDByDeviceID[deviceID] else { return }
         guard !session.connectedPeers.contains(peer) else { return }
+        guard shouldAttemptInvite(to: deviceID) else { return }
 
         let context = PeerInvitationContext(deviceID: self.deviceID, deviceName: localDeviceName)
         let contextData = try? JSONEncoder().encode(context)
+        lastInviteAttemptByDeviceID[deviceID] = Date()
         browser?.invitePeer(peer, to: session, withContext: contextData, timeout: 10)
+    }
+
+    private func shouldAttemptInvite(to deviceID: String) -> Bool {
+        guard let lastAttemptAt = lastInviteAttemptByDeviceID[deviceID] else {
+            return true
+        }
+
+        return Date().timeIntervalSince(lastAttemptAt) >= inviteRetryInterval
     }
 
     private func updatePeer(deviceID: String, mutate: (inout PeerDeviceState) -> Void) {
@@ -1624,6 +1636,14 @@ extension AirCopyCoordinator: MCSessionDelegate {
                     peer.isConnected = false
                 }
                 self.refreshPeerDevices()
+
+                if trustState == .trusted,
+                   self.peerStateByID[resolvedID]?.isDiscovered == true {
+                    self.statusText = "Reconnecting to \(peerName)..."
+                    self.inviteIfPossible(deviceID: resolvedID)
+                    return
+                }
+
                 self.statusText = self.connectedPeerCount == 0 ? "Waiting for a trusted nearby Mac." : "Connected to \(self.connectedPeerCount) Mac(s)."
             @unknown default:
                 self.statusText = "Peer state changed."
