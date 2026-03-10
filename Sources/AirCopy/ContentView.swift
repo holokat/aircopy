@@ -313,10 +313,6 @@ private struct MainPeerCard: View {
                         if peer.trustState == .trusted {
                             autoSyncToggle
                         }
-
-                        if showsManageButton {
-                            settingsIconButton
-                        }
                     }
 
                     statusBlock
@@ -388,27 +384,6 @@ private struct MainPeerCard: View {
         }
 
         return peer.lastReceiptText
-    }
-
-    private var showsManageButton: Bool {
-        switch peer.trustState {
-        case .trusted, .blocked:
-            return true
-        case .pending:
-            return false
-        }
-    }
-
-    private var settingsIconButton: some View {
-        Button(action: coordinator.showSettings) {
-            Image(systemName: "gearshape")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                .frame(width: 26, height: 26)
-                .background(Color.white.opacity(colorScheme == .light ? 0.82 : 0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Open device settings")
     }
 
     private var autoSyncToggle: some View {
