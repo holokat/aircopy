@@ -43,6 +43,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published var screenshotStyleSettings = ScreenshotStyleSettings() {
         didSet {
             persistScreenshotStyleSettings()
+            scheduleScreenshotStylePreviewUpdate()
         }
     }
 
@@ -115,6 +116,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var recentlyCopiedHistoryItemID: UUID?
     @Published private(set) var effectiveColorScheme: ColorScheme
     @Published private(set) var appIconImage: NSImage?
+    @Published private(set) var screenshotStylePreviewImage: NSImage?
     @Published private(set) var savedItemsBaseDirectoryPath: String
     @Published private(set) var temporarySyncUntil: Date? {
         didSet {
@@ -173,6 +175,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var clipboardTask: Task<Void, Never>?
     private var appearanceTask: Task<Void, Never>?
     private var syncExpirationTask: Task<Void, Never>?
+    private var screenshotPreviewTask: Task<Void, Never>?
     private var screenshotImportTask: Task<Void, Never>?
     nonisolated(unsafe) private var screenshotShortcutEventTap: CFMachPort?
     nonisolated(unsafe) private var screenshotShortcutRunLoopSource: CFRunLoopSource?
@@ -229,6 +232,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.requireDeviceApproval = defaults.object(forKey: Self.requireDeviceApprovalKey) as? Bool ?? true
         self.screenshotShortcutCapturePermissionGranted = Self.isAccessibilityTrusted()
         self.screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.preflightPermission()
+        self.screenshotStylePreviewImage = ScreenshotStyleRenderer.previewImage(using: loadedScreenshotStyleSettings)
         self.temporarySyncUntil = defaults.object(forKey: Self.temporarySyncUntilKey) as? Date
         self.trustedDeviceIDs = Self.loadStringSet(forKey: Self.trustedDeviceIDsKey)
         self.blockedDeviceIDs = Self.loadStringSet(forKey: Self.blockedDeviceIDsKey)
@@ -289,6 +293,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         clipboardTask?.cancel()
         appearanceTask?.cancel()
         syncExpirationTask?.cancel()
+        screenshotPreviewTask?.cancel()
         screenshotImportTask?.cancel()
         if let source = screenshotShortcutRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
@@ -390,10 +395,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return screenshotShortcutCaptureActive ? "Ready" : "Waiting to attach"
-    }
-
-    var screenshotStylePreviewImage: NSImage? {
-        ScreenshotStyleRenderer.previewImage(using: screenshotStyleSettings)
     }
 
     var savedItemsDirectoryDisplayPath: String {
@@ -847,6 +848,18 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private func refreshScreenshotScreenRecordingPermission() {
         screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.preflightPermission()
+    }
+
+    private func scheduleScreenshotStylePreviewUpdate() {
+        screenshotPreviewTask?.cancel()
+        let settings = screenshotStyleSettings
+
+        screenshotPreviewTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled else { return }
+            guard let self, self.screenshotStyleSettings == settings else { return }
+            self.screenshotStylePreviewImage = ScreenshotStyleRenderer.previewImage(using: settings)
+        }
     }
 
     private func reenableScreenshotShortcutCaptureIfNeeded() {

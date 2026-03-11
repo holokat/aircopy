@@ -154,7 +154,10 @@ struct ScreenshotStyleSettings: Codable, Hashable {
     var watermarkText = "AirCopy"
 }
 
+@MainActor
 enum ScreenshotStyleRenderer {
+    private static var backgroundPreviewCache: [String: NSImage] = [:]
+
     static func styledImageData(
         from imageData: Data,
         settings: ScreenshotStyleSettings,
@@ -180,11 +183,17 @@ enum ScreenshotStyleRenderer {
         for preset: ScreenshotBackgroundPreset,
         size: NSSize = NSSize(width: 92, height: 68)
     ) -> NSImage? {
+        let cacheKey = "\(preset.rawValue)-\(Int(size.width))x\(Int(size.height))"
+        if let cached = backgroundPreviewCache[cacheKey] {
+            return cached
+        }
+
         let image = NSImage(size: size)
         image.lockFocus()
         let rect = NSRect(origin: .zero, size: size)
         drawBackground(preset: preset, in: rect)
         image.unlockFocus()
+        backgroundPreviewCache[cacheKey] = image
         return image
     }
 
