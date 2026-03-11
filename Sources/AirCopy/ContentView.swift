@@ -1372,7 +1372,13 @@ private struct HistoryItemCard: View {
 
     @ViewBuilder
     private var previewThumbnail: some View {
-        if item.payload.isImageFileAttachment, let image = item.image {
+        if let thumbnail = coordinator.imageThumbnail(for: item) {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else if item.payload.isImageFileAttachment, let image = item.image {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -1381,13 +1387,7 @@ private struct HistoryItemCard: View {
         } else {
         switch item.kind {
         case .image:
-            if let image = item.image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 64, height: 64)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
+            previewIcon(symbol: item.symbolName, color: AirCopyTheme.highlight(for: colorScheme))
         case .code:
             VStack(alignment: .leading, spacing: 4) {
                 Image(systemName: item.symbolName)

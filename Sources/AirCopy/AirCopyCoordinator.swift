@@ -2,6 +2,7 @@ import AppKit
 @preconcurrency import ApplicationServices
 import Carbon.HIToolbox
 import Foundation
+import ImageIO
 import MultipeerConnectivity
 import SwiftUI
 import UniformTypeIdentifiers
@@ -117,6 +118,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var effectiveColorScheme: ColorScheme
     @Published private(set) var appIconImage: NSImage?
     @Published private(set) var screenshotStylePreviewImage: NSImage?
+    @Published private(set) var imageThumbnailByFingerprint: [String: NSImage] = [:]
     @Published private(set) var savedItemsBaseDirectoryPath: String
     @Published private(set) var temporarySyncUntil: Date? {
         didSet {
@@ -177,6 +179,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var syncExpirationTask: Task<Void, Never>?
     private var screenshotPreviewTask: Task<Void, Never>?
     private var screenshotImportTask: Task<Void, Never>?
+    private var thumbnailTasksByFingerprint: [String: Task<Void, Never>] = [:]
     nonisolated(unsafe) private var screenshotShortcutEventTap: CFMachPort?
     nonisolated(unsafe) private var screenshotShortcutRunLoopSource: CFRunLoopSource?
     private var clearCopiedStateTask: Task<Void, Never>?
@@ -295,6 +298,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         syncExpirationTask?.cancel()
         screenshotPreviewTask?.cancel()
         screenshotImportTask?.cancel()
+        thumbnailTasksByFingerprint.values.forEach { $0.cancel() }
         if let source = screenshotShortcutRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             screenshotShortcutRunLoopSource = nil
@@ -325,6 +329,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     var latestClipboardItem: ClipboardHistoryItem? {
         clipboardHistory.sorted(by: historySort).first
+    }
+
+    func imageThumbnail(for item: ClipboardHistoryItem) -> NSImage? {
+        imageThumbnailByFingerprint[item.fingerprint]
     }
 
     var latestImageItem: ClipboardHistoryItem? {
@@ -1374,6 +1382,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         clipboardHistory.removeAll { $0.fingerprint == payload.fingerprint }
         clipboardHistory.append(item)
         sortAndTrimHistory()
+        scheduleThumbnailGenerationIfNeeded(for: item)
         return item
     }
 
@@ -1391,6 +1400,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         if clipboardHistory.count > maxHistoryItems {
             clipboardHistory = Array(clipboardHistory.prefix(maxHistoryItems))
         }
+
+        let retainedFingerprints = Set(clipboardHistory.map(\.fingerprint))
+        imageThumbnailByFingerprint = imageThumbnailByFingerprint.filter { retainedFingerprints.contains($0.key) }
+        thumbnailTasksByFingerprint = thumbnailTasksByFingerprint.filter { retainedFingerprints.contains($0.key) }
     }
 
     private func historySort(_ lhs: ClipboardHistoryItem, _ rhs: ClipboardHistoryItem) -> Bool {
@@ -1463,6 +1476,75 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         } else {
             NSSound.beep()
         }
+    }
+
+    private func scheduleThumbnailGenerationIfNeeded(for item: ClipboardHistoryItem) {
+        guard imageThumbnailByFingerprint[item.fingerprint] == nil else { return }
+        guard thumbnailTasksByFingerprint[item.fingerprint] == nil else { return }
+
+        let sourceData: Data?
+        if let imageData = item.payload.imageData {
+            sourceData = imageData
+        } else if item.payload.isImageFileAttachment,
+                  item.payload.attachments.count == 1,
+                  let inlineData = item.payload.attachments.first?.inlineData {
+            sourceData = inlineData
+        } else {
+            sourceData = nil
+        }
+
+        guard let sourceData else { return }
+        let fingerprint = item.fingerprint
+
+        thumbnailTasksByFingerprint[fingerprint] = Task.detached(priority: .utility) { [sourceData] in
+            let thumbnailData = Self.thumbnailData(from: sourceData, maxPixelSize: 160)
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                defer { self.thumbnailTasksByFingerprint[fingerprint] = nil }
+
+                guard let thumbnailData,
+                      let image = NSImage(data: thumbnailData) else {
+                    return
+                }
+
+                self.imageThumbnailByFingerprint[fingerprint] = image
+            }
+        }
+    }
+
+    private nonisolated static func thumbnailData(from imageData: Data, maxPixelSize: Int) -> Data? {
+        guard let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil) else {
+            return nil
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+
+        guard let thumbnailImage = CGImageSourceCreateThumbnailAtIndex(
+            imageSource,
+            0,
+            options as CFDictionary
+        ) else {
+            return nil
+        }
+
+        let mutableData = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            mutableData,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+
+        CGImageDestinationAddImage(destination, thumbnailImage, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return mutableData as Data
     }
 
     private func markHistoryItemCopied(_ id: UUID) {

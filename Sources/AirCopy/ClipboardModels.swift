@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
+import ImageIO
 import UniformTypeIdentifiers
 
 enum ClipboardPayloadKind: String, Codable, Hashable, CaseIterable, Identifiable {
@@ -219,6 +220,8 @@ struct ClipboardPayload: Codable, Hashable {
     let kind: ClipboardPayloadKind
     let text: String?
     let imageData: Data?
+    let imageWidth: Int?
+    let imageHeight: Int?
     let urlString: String?
     let linkTitle: String?
     let attachments: [ClipboardAttachment]
@@ -231,6 +234,8 @@ struct ClipboardPayload: Codable, Hashable {
         kind: ClipboardPayloadKind,
         text: String? = nil,
         imageData: Data? = nil,
+        imageWidth: Int? = nil,
+        imageHeight: Int? = nil,
         urlString: String? = nil,
         linkTitle: String? = nil,
         attachments: [ClipboardAttachment] = [],
@@ -242,6 +247,14 @@ struct ClipboardPayload: Codable, Hashable {
         self.kind = kind
         self.text = text
         self.imageData = imageData
+        let resolvedImageDimensions: (width: Int?, height: Int?)
+        if kind == .image, let imageData, imageWidth == nil || imageHeight == nil {
+            resolvedImageDimensions = Self.imageDimensions(from: imageData)
+        } else {
+            resolvedImageDimensions = (imageWidth, imageHeight)
+        }
+        self.imageWidth = resolvedImageDimensions.width
+        self.imageHeight = resolvedImageDimensions.height
         self.urlString = urlString
         self.linkTitle = linkTitle
         self.attachments = attachments
@@ -355,8 +368,8 @@ struct ClipboardPayload: Codable, Hashable {
         case .browserTab:
             return urlDisplay ?? linkTitle ?? "Browser tab"
         case .image:
-            if let size = imageSize {
-                return "\(Int(size.width)) × \(Int(size.height)) image"
+            if let imageWidth, let imageHeight {
+                return "\(imageWidth) × \(imageHeight) image"
             }
             return "Image"
         case .file:
@@ -415,7 +428,10 @@ struct ClipboardPayload: Codable, Hashable {
     }
 
     var imageSize: NSSize? {
-        image?.size
+        if let imageWidth, let imageHeight {
+            return NSSize(width: imageWidth, height: imageHeight)
+        }
+        return image?.size
     }
 
     var searchableText: String {
@@ -521,6 +537,17 @@ struct ClipboardPayload: Codable, Hashable {
 
         let index = normalized.index(normalized.startIndex, offsetBy: max(0, limit - 3))
         return "\(normalized[..<index])..."
+    }
+
+    private static func imageDimensions(from data: Data) -> (width: Int?, height: Int?) {
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] else {
+            return (nil, nil)
+        }
+
+        let width = properties[kCGImagePropertyPixelWidth] as? Int
+        let height = properties[kCGImagePropertyPixelHeight] as? Int
+        return (width, height)
     }
 }
 
