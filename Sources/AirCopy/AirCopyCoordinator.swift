@@ -33,6 +33,16 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
+    @Published var importSystemScreenshotsEnabled = true {
+        didSet {
+            UserDefaults.standard.set(importSystemScreenshotsEnabled, forKey: Self.importSystemScreenshotsEnabledKey)
+            restartScreenshotImportMonitorIfNeeded()
+            statusText = importSystemScreenshotsEnabled
+                ? "Importing standard macOS screenshots."
+                : "Standard macOS screenshot import is off."
+        }
+    }
+
     @Published var saveReceivedItemsToDiskEnabled = false {
         didSet {
             UserDefaults.standard.set(saveReceivedItemsToDiskEnabled, forKey: Self.saveReceivedItemsToDiskEnabledKey)
@@ -109,6 +119,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         "com.dashlane.dashlanephonefinal",
         "org.keepassxc.keepassxc"
     ]
+    private static let imageFileExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "heif",
+        "tif", "tiff", "bmp", "avif", "jxl", "icns"
+    ]
 
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser?
@@ -129,13 +143,17 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var clipboardTask: Task<Void, Never>?
     private var appearanceTask: Task<Void, Never>?
     private var syncExpirationTask: Task<Void, Never>?
+    private var screenshotImportTask: Task<Void, Never>?
     private var clearCopiedStateTask: Task<Void, Never>?
     private var lastObservedChangeCount: Int
     private var lastKnownPayload: ClipboardPayload?
     private var pendingRemotePayload: ClipboardPayload?
+    private var knownScreenshotFileSignatures = Set<String>()
+    private var screenshotMonitorFolderPath: String?
 
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
+    private static let importSystemScreenshotsEnabledKey = "import-system-screenshots-enabled"
     private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
     private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
     private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
@@ -163,6 +181,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.deviceID = Self.loadOrCreateDeviceID()
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
+        self.importSystemScreenshotsEnabled = defaults.object(forKey: Self.importSystemScreenshotsEnabledKey) as? Bool ?? true
         self.saveReceivedItemsToDiskEnabled = defaults.object(forKey: Self.saveReceivedItemsToDiskEnabledKey) as? Bool ?? false
         self.saveReceivedImagesToDisk = defaults.object(forKey: Self.saveReceivedImagesToDiskKey) as? Bool ?? true
         self.saveReceivedTextToDisk = defaults.object(forKey: Self.saveReceivedTextToDiskKey) as? Bool ?? true
@@ -221,6 +240,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         startClipboardMonitor()
         startAppearanceMonitor()
         scheduleSyncExpirationTask()
+        restartScreenshotImportMonitorIfNeeded()
         statusText = connectedPeerCount == 0 ? "Approve a nearby Mac or keep syncing locally." : "Ready."
     }
 
@@ -228,6 +248,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         clipboardTask?.cancel()
         appearanceTask?.cancel()
         syncExpirationTask?.cancel()
+        screenshotImportTask?.cancel()
         clearCopiedStateTask?.cancel()
     }
 
@@ -298,6 +319,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     var customExclusionCount: Int {
         excludedApplications.count
+    }
+
+    var screenshotImportFolderDisplayPath: String {
+        (systemScreenshotFolderURL.path as NSString).abbreviatingWithTildeInPath
     }
 
     var savedItemsDirectoryDisplayPath: String {
@@ -643,6 +668,109 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    private func restartScreenshotImportMonitorIfNeeded() {
+        screenshotImportTask?.cancel()
+        screenshotImportTask = nil
+        screenshotMonitorFolderPath = nil
+        knownScreenshotFileSignatures.removeAll()
+
+        guard importSystemScreenshotsEnabled else { return }
+
+        seedKnownScreenshotFiles()
+
+        screenshotImportTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(850))
+                await MainActor.run {
+                    self?.pollScreenshotFolder()
+                }
+            }
+        }
+    }
+
+    private func seedKnownScreenshotFiles() {
+        let folderURL = systemScreenshotFolderURL
+        screenshotMonitorFolderPath = folderURL.path
+        guard let candidates = screenshotCandidateFiles(in: folderURL) else {
+            statusText = "Allow access to \(screenshotImportFolderDisplayPath) so AirCopy can import standard screenshots."
+            return
+        }
+
+        knownScreenshotFileSignatures = Set(candidates.map(fileSignature(for:)))
+    }
+
+    private func pollScreenshotFolder() {
+        let folderURL = systemScreenshotFolderURL
+
+        if screenshotMonitorFolderPath != folderURL.path {
+            screenshotMonitorFolderPath = folderURL.path
+            guard let candidates = screenshotCandidateFiles(in: folderURL) else {
+                statusText = "Allow access to \(screenshotImportFolderDisplayPath) so AirCopy can import standard screenshots."
+                return
+            }
+
+            knownScreenshotFileSignatures = Set(candidates.map(fileSignature(for:)))
+            return
+        }
+
+        guard let candidates = screenshotCandidateFiles(in: folderURL) else {
+            statusText = "Allow access to \(screenshotImportFolderDisplayPath) so AirCopy can import standard screenshots."
+            return
+        }
+        guard !candidates.isEmpty else { return }
+
+        for url in candidates.sorted(by: screenshotFileSort) {
+            let signature = fileSignature(for: url)
+            guard !knownScreenshotFileSignatures.contains(signature) else { continue }
+
+            if importScreenshotFile(at: url) {
+                knownScreenshotFileSignatures.insert(signature)
+            }
+        }
+    }
+
+    private func screenshotFileSort(_ lhs: URL, _ rhs: URL) -> Bool {
+        screenshotTimestamp(for: lhs) < screenshotTimestamp(for: rhs)
+    }
+
+    @discardableResult
+    private func importScreenshotFile(at fileURL: URL) -> Bool {
+        let age = Date().timeIntervalSince(screenshotTimestamp(for: fileURL))
+        guard age >= 0.35 else { return false }
+        guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else { return false }
+        guard NSImage(data: imageData) != nil else { return false }
+
+        let payload = ClipboardPayload(
+            imageData: imageData,
+            sourceAppBundleID: nil,
+            sourceAppName: "Screenshot"
+        )
+
+        pendingRemotePayload = nil
+        lastKnownPayload = payload
+        writePayloadToPasteboard(payload)
+
+        let item = recordHistory(
+            payload: payload,
+            source: "Imported from macOS screenshot",
+            senderName: localDeviceName,
+            date: Date()
+        )
+
+        if !imageSyncEnabled {
+            statusText = "Imported screenshot locally. Image sync is paused."
+            return true
+        }
+
+        guard syncEnabled else {
+            statusText = "Imported screenshot locally. Sync is off."
+            return true
+        }
+
+        sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
+        return true
     }
 
     private func scheduleSyncExpirationTask() {
@@ -1228,6 +1356,16 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         return !autoSyncDisabledDeviceIDs.contains(deviceID)
     }
 
+    private var systemScreenshotFolderURL: URL {
+        if let location = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location"),
+           !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: (location as NSString).expandingTildeInPath, isDirectory: true)
+        }
+
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop", isDirectory: true)
+    }
+
     private var savedItemsBaseDirectoryURL: URL {
         let trimmedPath = savedItemsBaseDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedPath = trimmedPath.isEmpty ? Self.defaultSavedItemsBaseDirectory.path : trimmedPath
@@ -1426,6 +1564,64 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd-HHmmss"
         return formatter.string(from: date)
+    }
+
+    private func screenshotCandidateFiles(in folderURL: URL) -> [URL]? {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [
+                .isRegularFileKey,
+                .contentTypeKey,
+                .contentModificationDateKey,
+                .creationDateKey
+            ],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        return urls.filter { url in
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey]),
+                  values.isRegularFile == true else {
+                return false
+            }
+
+            let contentTypeIsImage = values.contentType?.conforms(to: .image) == true
+            let extensionIsImage = Self.imageFileExtensions.contains(url.pathExtension.lowercased())
+            guard contentTypeIsImage || extensionIsImage else { return false }
+            return Self.looksLikeScreenshotFilename(url.lastPathComponent)
+        }
+    }
+
+    private func screenshotTimestamp(for fileURL: URL) -> Date {
+        let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+        return values?.contentModificationDate ?? values?.creationDate ?? .distantPast
+    }
+
+    private func fileSignature(for fileURL: URL) -> String {
+        let timestamp = screenshotTimestamp(for: fileURL)
+        return "\(fileURL.path)#\(timestamp.timeIntervalSince1970)"
+    }
+
+    private static func looksLikeScreenshotFilename(_ filename: String) -> Bool {
+        let normalized = filename
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+
+        let markers = [
+            "screenshot",
+            "screen shot",
+            "screen-shot",
+            "screen_shot",
+            "screencapture",
+            "screen capture",
+            "captura de pantalla",
+            "captura de tela",
+            "capture d'ecran",
+            "capture decran"
+        ]
+
+        return markers.contains { normalized.contains($0) }
     }
 
     private func shouldSuppressSync(for payload: ClipboardPayload) -> Bool {

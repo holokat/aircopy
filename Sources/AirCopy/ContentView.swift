@@ -667,6 +667,26 @@ private struct AirCopySettingsView: View {
                 }
             }
 
+            settingsGroup(title: "Standard Screenshots", subtitle: "Make normal macOS screenshot shortcuts behave like live AirCopy items.") {
+                Toggle("Import standard macOS screenshots", isOn: $coordinator.importSystemScreenshotsEnabled)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Watched Folder")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    Text(coordinator.screenshotImportFolderDisplayPath)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        .textSelection(.enabled)
+
+                    Text("AirCopy automatically watches your current macOS screenshot location and imports new screenshots into clipboard history and sync.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
         case .privacy:
             settingsGroup(title: "Privacy Rules", subtitle: "Protect sensitive sources and exclude noisy apps.") {
                 settingsRow(title: "Password managers", value: "Always blocked from sync")
