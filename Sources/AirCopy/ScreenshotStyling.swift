@@ -467,97 +467,123 @@ enum ScreenshotStyleRenderer {
 
         image.lockFocus()
         let canvasRect = NSRect(origin: .zero, size: size)
-        NSColor(calibratedRed: 0.95, green: 0.96, blue: 0.98, alpha: 1).setFill()
+        NSColor(calibratedRed: 0.95, green: 0.97, blue: 1.00, alpha: 1).setFill()
         canvasRect.fill()
 
-        let windowRect = NSRect(x: 84, y: 90, width: 1352, height: 780)
-        let windowPath = NSBezierPath(roundedRect: windowRect, xRadius: 28, yRadius: 28)
+        let postRect = NSRect(x: 196, y: 136, width: 1128, height: 676)
+        let postPath = NSBezierPath(roundedRect: postRect, xRadius: 32, yRadius: 32)
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
-        shadow.shadowBlurRadius = 22
-        shadow.shadowOffset = NSSize(width: 0, height: -10)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.10)
+        shadow.shadowBlurRadius = 28
+        shadow.shadowOffset = NSSize(width: 0, height: -12)
         shadow.set()
         NSColor.white.setFill()
-        windowPath.fill()
+        postPath.fill()
         NSGraphicsContext.restoreGraphicsState()
 
-        NSColor(calibratedRed: 0.92, green: 0.94, blue: 0.98, alpha: 1).setFill()
-        NSBezierPath(
-            rect: NSRect(x: windowRect.minX, y: windowRect.maxY - 68, width: windowRect.width, height: 68)
-        ).fill()
+        let avatarRect = NSRect(x: postRect.minX + 40, y: postRect.maxY - 112, width: 66, height: 66)
+        let avatarGradient = NSGradient(colors: [
+            NSColor(calibratedRed: 0.48, green: 0.58, blue: 0.97, alpha: 1),
+            NSColor(calibratedRed: 0.72, green: 0.42, blue: 0.92, alpha: 1)
+        ])
+        avatarGradient?.draw(in: avatarRect, relativeCenterPosition: .zero)
+        NSColor.white.withAlphaComponent(0.16).setStroke()
+        NSBezierPath(ovalIn: avatarRect).stroke()
 
-        let dots = [
-            NSColor(calibratedRed: 1.00, green: 0.37, blue: 0.36, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.74, blue: 0.27, alpha: 1),
-            NSColor(calibratedRed: 0.23, green: 0.80, blue: 0.42, alpha: 1)
+        let nameAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 26, weight: .bold),
+            .foregroundColor: NSColor(calibratedRed: 0.10, green: 0.13, blue: 0.20, alpha: 1)
         ]
+        NSAttributedString(string: "Ava Chen", attributes: nameAttributes)
+            .draw(at: CGPoint(x: avatarRect.maxX + 20, y: avatarRect.maxY - 10))
 
-        for (index, color) in dots.enumerated() {
-            color.setFill()
-            let dotRect = NSRect(
-                x: windowRect.minX + 26 + CGFloat(index * 20),
-                y: windowRect.maxY - 44,
-                width: 12,
-                height: 12
-            )
-            NSBezierPath(ovalIn: dotRect).fill()
-        }
-
-        let sidebarRect = NSRect(x: windowRect.minX, y: windowRect.minY, width: 244, height: windowRect.height - 68)
-        NSColor(calibratedRed: 0.14, green: 0.17, blue: 0.24, alpha: 1).setFill()
-        NSBezierPath(roundedRect: sidebarRect, xRadius: 24, yRadius: 24).fill()
-
-        let titleAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 34, weight: .bold),
-            .foregroundColor: NSColor(calibratedRed: 0.12, green: 0.15, blue: 0.21, alpha: 1)
+        let handleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 18, weight: .medium),
+            .foregroundColor: NSColor(calibratedRed: 0.44, green: 0.49, blue: 0.58, alpha: 1)
         ]
-        NSAttributedString(string: "Beautiful screenshots, instantly.", attributes: titleAttributes)
-            .draw(at: CGPoint(x: windowRect.minX + 300, y: windowRect.maxY - 150))
+        NSAttributedString(string: "@avachenshares", attributes: handleAttributes)
+            .draw(at: CGPoint(x: avatarRect.maxX + 20, y: avatarRect.minY + 10))
 
         let bodyAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 22, weight: .medium),
-            .foregroundColor: NSColor(calibratedRed: 0.40, green: 0.45, blue: 0.54, alpha: 1)
+            .font: NSFont.systemFont(ofSize: 34, weight: .semibold),
+            .foregroundColor: NSColor(calibratedRed: 0.12, green: 0.15, blue: 0.22, alpha: 1)
         ]
         NSAttributedString(
-            string: "AirCopy can frame, soften, and clean up your clipboard screenshots before you share them.",
+            string: "AirCopy makes Mac screenshots feel share-ready the second you capture them.",
             attributes: bodyAttributes
         )
-        .draw(in: NSRect(x: windowRect.minX + 300, y: windowRect.maxY - 250, width: 860, height: 120))
+        .draw(in: NSRect(x: postRect.minX + 40, y: postRect.maxY - 232, width: 1000, height: 120))
 
-        let heroCardRect = NSRect(x: windowRect.minX + 300, y: windowRect.minY + 150, width: 470, height: 290)
-        let heroCardPath = NSBezierPath(roundedRect: heroCardRect, xRadius: 28, yRadius: 28)
-        NSColor(calibratedRed: 0.15, green: 0.20, blue: 0.30, alpha: 1).setFill()
-        heroCardPath.fill()
+        let mediaRect = NSRect(x: postRect.minX + 40, y: postRect.minY + 118, width: postRect.width - 80, height: 320)
+        let mediaPath = NSBezierPath(roundedRect: mediaRect, xRadius: 26, yRadius: 26)
+        NSColor(calibratedRed: 0.94, green: 0.96, blue: 1.00, alpha: 1).setFill()
+        mediaPath.fill()
 
-        let metricAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 26, weight: .bold),
+        let appCardRect = NSRect(x: mediaRect.minX + 40, y: mediaRect.minY + 52, width: 422, height: 216)
+        let appCardPath = NSBezierPath(roundedRect: appCardRect, xRadius: 24, yRadius: 24)
+        let appCardGradient = NSGradient(colors: [
+            NSColor(calibratedRed: 0.18, green: 0.23, blue: 0.36, alpha: 1),
+            NSColor(calibratedRed: 0.26, green: 0.34, blue: 0.52, alpha: 1)
+        ])
+        appCardGradient?.draw(in: appCardRect, angle: 128)
+        NSColor.white.withAlphaComponent(0.12).setStroke()
+        appCardPath.stroke()
+
+        let cardTitleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 23, weight: .bold),
             .foregroundColor: NSColor.white
         ]
-        NSAttributedString(string: "Clipboard sync", attributes: metricAttributes)
-            .draw(at: CGPoint(x: heroCardRect.minX + 34, y: heroCardRect.maxY - 72))
-        NSAttributedString(string: "81 Likes", attributes: metricAttributes)
-            .draw(at: CGPoint(x: heroCardRect.minX + 34, y: heroCardRect.maxY - 136))
-        NSAttributedString(string: "53 Comments", attributes: bodyAttributes)
-            .draw(at: CGPoint(x: heroCardRect.minX + 34, y: heroCardRect.maxY - 196))
-        NSAttributedString(string: "k@example.com", attributes: bodyAttributes)
-            .draw(at: CGPoint(x: heroCardRect.minX + 34, y: heroCardRect.maxY - 252))
+        NSAttributedString(string: "AirCopy for Mac", attributes: cardTitleAttributes)
+            .draw(at: CGPoint(x: appCardRect.minX + 24, y: appCardRect.maxY - 60))
 
-        let chartRect = NSRect(x: heroCardRect.maxX + 56, y: heroCardRect.minY + 16, width: 450, height: 258)
-        let chartPath = NSBezierPath(roundedRect: chartRect, xRadius: 24, yRadius: 24)
-        NSColor(calibratedRed: 0.96, green: 0.97, blue: 1.00, alpha: 1).setFill()
-        chartPath.fill()
-
-        let linePath = NSBezierPath()
-        linePath.move(to: CGPoint(x: chartRect.minX + 28, y: chartRect.minY + 62))
-        linePath.curve(
-            to: CGPoint(x: chartRect.maxX - 30, y: chartRect.maxY - 56),
-            controlPoint1: CGPoint(x: chartRect.minX + 120, y: chartRect.minY + 24),
-            controlPoint2: CGPoint(x: chartRect.maxX - 140, y: chartRect.maxY - 10)
+        let cardBodyAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 18, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.86)
+        ]
+        NSAttributedString(
+            string: "Screenshot. Sync. Paste on the other Mac.",
+            attributes: cardBodyAttributes
         )
-        linePath.lineWidth = 8
-        NSColor(calibratedRed: 0.43, green: 0.46, blue: 0.95, alpha: 1).setStroke()
-        linePath.stroke()
+        .draw(in: NSRect(x: appCardRect.minX + 24, y: appCardRect.maxY - 122, width: 360, height: 52))
+
+        let badgeRect = NSRect(x: appCardRect.minX + 24, y: appCardRect.minY + 26, width: 144, height: 38)
+        let badgePath = NSBezierPath(roundedRect: badgeRect, xRadius: 19, yRadius: 19)
+        NSColor.white.withAlphaComponent(0.14).setFill()
+        badgePath.fill()
+        let badgeAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+            .foregroundColor: NSColor.white
+        ]
+        NSAttributedString(string: "Styled capture", attributes: badgeAttributes)
+            .draw(at: CGPoint(x: badgeRect.minX + 18, y: badgeRect.minY + 10))
+
+        let statCardRect = NSRect(x: mediaRect.maxX - 296, y: mediaRect.minY + 52, width: 240, height: 216)
+        let statCardPath = NSBezierPath(roundedRect: statCardRect, xRadius: 24, yRadius: 24)
+        NSColor.white.withAlphaComponent(0.78).setFill()
+        statCardPath.fill()
+
+        let statTitleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 18, weight: .semibold),
+            .foregroundColor: NSColor(calibratedRed: 0.19, green: 0.24, blue: 0.35, alpha: 1)
+        ]
+        let statValueAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 38, weight: .bold),
+            .foregroundColor: NSColor(calibratedRed: 0.30, green: 0.39, blue: 0.83, alpha: 1)
+        ]
+        NSAttributedString(string: "Shares", attributes: statTitleAttributes)
+            .draw(at: CGPoint(x: statCardRect.minX + 24, y: statCardRect.maxY - 54))
+        NSAttributedString(string: "2.4k", attributes: statValueAttributes)
+            .draw(at: CGPoint(x: statCardRect.minX + 24, y: statCardRect.maxY - 118))
+        NSAttributedString(string: "faster than moving files around", attributes: handleAttributes)
+            .draw(in: NSRect(x: statCardRect.minX + 24, y: statCardRect.minY + 34, width: 180, height: 42))
+
+        let footerAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 20, weight: .medium),
+            .foregroundColor: NSColor(calibratedRed: 0.35, green: 0.40, blue: 0.50, alpha: 1)
+        ]
+        NSAttributedString(string: "Drag less. Share faster. Keep screenshots in flow.", attributes: footerAttributes)
+            .draw(at: CGPoint(x: postRect.minX + 42, y: postRect.minY + 48))
 
         image.unlockFocus()
         return image
