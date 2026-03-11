@@ -438,27 +438,82 @@ enum ScreenshotStyleRenderer {
         guard let observations = request.results else { return }
 
         for observation in observations {
-            guard let text = observation.topCandidates(1).first?.string,
-                  let emailRegex,
-                  emailRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil else {
+            guard let candidate = observation.topCandidates(1).first,
+                  let emailRegex else {
                 continue
             }
 
-            let bounds = observation.boundingBox
-            let redactionRect = CGRect(
-                x: screenshotRect.minX + (bounds.minX * screenshotRect.width) - 6,
-                y: screenshotRect.minY + (bounds.minY * screenshotRect.height) - 4,
-                width: (bounds.width * screenshotRect.width) + 12,
-                height: (bounds.height * screenshotRect.height) + 8
-            )
+            let text = candidate.string
+            let matches = emailRegex.matches(in: text, range: NSRange(text.startIndex..., in: text))
 
-            let path = NSBezierPath(roundedRect: redactionRect, xRadius: 8, yRadius: 8)
-            NSColor(calibratedWhite: 0.08, alpha: 0.84).setFill()
-            path.fill()
-            NSColor.white.withAlphaComponent(0.16).setStroke()
-            path.lineWidth = 1
-            path.stroke()
+            for match in matches {
+                guard let range = Range(match.range, in: text),
+                      let matchBounds = try? candidate.boundingBox(for: range)?.boundingBox else {
+                    continue
+                }
+
+                let paddingX = max(4, screenshotRect.width * 0.004)
+                let paddingY = max(3, screenshotRect.height * 0.004)
+                let redactionRect = CGRect(
+                    x: screenshotRect.minX + (matchBounds.minX * screenshotRect.width) - paddingX,
+                    y: screenshotRect.minY + (matchBounds.minY * screenshotRect.height) - paddingY,
+                    width: (matchBounds.width * screenshotRect.width) + (paddingX * 2),
+                    height: (matchBounds.height * screenshotRect.height) + (paddingY * 2)
+                ).integral
+
+                guard redactionRect.width > 4, redactionRect.height > 4 else { continue }
+                drawPixelatedRedaction(in: redactionRect)
+            }
         }
+    }
+
+    private static func drawPixelatedRedaction(in rect: CGRect) {
+        let clippingPath = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        NSGraphicsContext.saveGraphicsState()
+        clippingPath.addClip()
+
+        NSColor(calibratedWhite: 0.08, alpha: 0.98).setFill()
+        rect.fill()
+
+        let baseTileSize = max(6, min(14, rect.height / 3.2))
+        let tileSize = floor(baseTileSize)
+        let palette: [NSColor] = [
+            NSColor(calibratedWhite: 0.20, alpha: 1),
+            NSColor(calibratedWhite: 0.28, alpha: 1),
+            NSColor(calibratedWhite: 0.36, alpha: 1),
+            NSColor(calibratedWhite: 0.46, alpha: 1)
+        ]
+
+        var rowIndex = 0
+        var y = rect.minY
+        while y < rect.maxY {
+            var columnIndex = 0
+            var x = rect.minX
+            while x < rect.maxX {
+                let tileRect = CGRect(
+                    x: x,
+                    y: y,
+                    width: min(tileSize, rect.maxX - x),
+                    height: min(tileSize, rect.maxY - y)
+                )
+
+                let paletteIndex = abs((rowIndex * 3) + (columnIndex * 5)) % palette.count
+                palette[paletteIndex].setFill()
+                tileRect.fill()
+
+                x += tileSize
+                columnIndex += 1
+            }
+
+            y += tileSize
+            rowIndex += 1
+        }
+
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSColor.white.withAlphaComponent(0.16).setStroke()
+        clippingPath.lineWidth = 1
+        clippingPath.stroke()
     }
 
     private static func sampleScreenshotImage() -> NSImage {
