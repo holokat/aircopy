@@ -18,6 +18,18 @@ struct MenuBarContentView: View {
             menuRowLabel("Open Settings", systemImage: "gearshape")
         }
 
+        Button {
+            coordinator.captureSelectionScreenshot()
+        } label: {
+            menuRowLabel("Capture Selection Screenshot", systemImage: "crop")
+        }
+
+        Button {
+            coordinator.captureFullScreenScreenshot()
+        } label: {
+            menuRowLabel("Capture Full-Screen Screenshot", systemImage: "rectangle.expand.vertical")
+        }
+
         Divider()
 
         Toggle(isOn: Binding(

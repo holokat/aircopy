@@ -1,4 +1,6 @@
 import AppKit
+@preconcurrency import ApplicationServices
+import Carbon.HIToolbox
 import Foundation
 import MultipeerConnectivity
 import SwiftUI
@@ -6,6 +8,11 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AirCopyCoordinator: NSObject, ObservableObject {
+    private enum ScreenshotShortcutMode {
+        case fullScreen
+        case selection
+    }
+
     private enum SaveReceivedPayloadResult {
         case skipped
         case saved(String)
@@ -40,6 +47,19 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             statusText = importSystemScreenshotsEnabled
                 ? "Importing standard macOS screenshots."
                 : "Standard macOS screenshot import is off."
+        }
+    }
+
+    @Published var captureStandardScreenshotShortcutsEnabled = false {
+        didSet {
+            UserDefaults.standard.set(
+                captureStandardScreenshotShortcutsEnabled,
+                forKey: Self.captureStandardScreenshotShortcutsEnabledKey
+            )
+            restartScreenshotShortcutCaptureIfNeeded(promptForPermission: true)
+            statusText = captureStandardScreenshotShortcutsEnabled
+                ? "AirCopy screenshot shortcuts are on."
+                : "AirCopy screenshot shortcuts are off."
         }
     }
 
@@ -103,6 +123,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
     @Published private(set) var frontmostApplicationName: String
     @Published private(set) var excludedApplications: [AppExclusion] = []
+    @Published private(set) var screenshotShortcutCapturePermissionGranted = false
+    @Published private(set) var screenshotShortcutCaptureActive = false
 
     private let serviceType = "aircopy"
     private let deviceID: String
@@ -144,6 +166,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var appearanceTask: Task<Void, Never>?
     private var syncExpirationTask: Task<Void, Never>?
     private var screenshotImportTask: Task<Void, Never>?
+    nonisolated(unsafe) private var screenshotShortcutEventTap: CFMachPort?
+    nonisolated(unsafe) private var screenshotShortcutRunLoopSource: CFRunLoopSource?
+    private var activeScreenshotCaptureProcess: Process?
     private var clearCopiedStateTask: Task<Void, Never>?
     private var lastObservedChangeCount: Int
     private var lastKnownPayload: ClipboardPayload?
@@ -154,6 +179,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
     private static let importSystemScreenshotsEnabledKey = "import-system-screenshots-enabled"
+    private static let captureStandardScreenshotShortcutsEnabledKey = "capture-standard-screenshot-shortcuts-enabled"
     private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
     private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
     private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
@@ -182,6 +208,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
         self.importSystemScreenshotsEnabled = defaults.object(forKey: Self.importSystemScreenshotsEnabledKey) as? Bool ?? true
+        self.captureStandardScreenshotShortcutsEnabled =
+            defaults.object(forKey: Self.captureStandardScreenshotShortcutsEnabledKey) as? Bool ?? false
         self.saveReceivedItemsToDiskEnabled = defaults.object(forKey: Self.saveReceivedItemsToDiskEnabledKey) as? Bool ?? false
         self.saveReceivedImagesToDisk = defaults.object(forKey: Self.saveReceivedImagesToDiskKey) as? Bool ?? true
         self.saveReceivedTextToDisk = defaults.object(forKey: Self.saveReceivedTextToDiskKey) as? Bool ?? true
@@ -189,6 +217,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.savedItemsBaseDirectoryPath = defaults.string(forKey: Self.savedItemsBaseDirectoryPathKey)
             ?? Self.defaultSavedItemsBaseDirectory.path
         self.requireDeviceApproval = defaults.object(forKey: Self.requireDeviceApprovalKey) as? Bool ?? true
+        self.screenshotShortcutCapturePermissionGranted = Self.isAccessibilityTrusted()
         self.temporarySyncUntil = defaults.object(forKey: Self.temporarySyncUntilKey) as? Date
         self.trustedDeviceIDs = Self.loadStringSet(forKey: Self.trustedDeviceIDsKey)
         self.blockedDeviceIDs = Self.loadStringSet(forKey: Self.blockedDeviceIDsKey)
@@ -241,6 +270,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         startAppearanceMonitor()
         scheduleSyncExpirationTask()
         restartScreenshotImportMonitorIfNeeded()
+        restartScreenshotShortcutCaptureIfNeeded()
         statusText = connectedPeerCount == 0 ? "Approve a nearby Mac or keep syncing locally." : "Ready."
     }
 
@@ -249,6 +279,17 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         appearanceTask?.cancel()
         syncExpirationTask?.cancel()
         screenshotImportTask?.cancel()
+        if let source = screenshotShortcutRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            screenshotShortcutRunLoopSource = nil
+        }
+
+        if let tap = screenshotShortcutEventTap {
+            CFMachPortInvalidate(tap)
+            screenshotShortcutEventTap = nil
+        }
+
+        activeScreenshotCaptureProcess?.terminate()
         clearCopiedStateTask?.cancel()
     }
 
@@ -323,6 +364,18 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     var screenshotImportFolderDisplayPath: String {
         (systemScreenshotFolderURL.path as NSString).abbreviatingWithTildeInPath
+    }
+
+    var screenshotShortcutCaptureStatusText: String {
+        if !captureStandardScreenshotShortcutsEnabled {
+            return "Off"
+        }
+
+        if screenshotShortcutCaptureActive {
+            return "Ready"
+        }
+
+        return screenshotShortcutCapturePermissionGranted ? "Waiting to attach" : "Needs Accessibility permission"
     }
 
     var savedItemsDirectoryDisplayPath: String {
@@ -598,6 +651,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func showMainWindow() {
+        refreshScreenshotShortcutPermission(prompt: false)
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first {
             window.orderFrontRegardless()
@@ -608,6 +662,22 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     func showSettings() {
         showMainWindow()
         settingsPresented = true
+    }
+
+    func captureSelectionScreenshot() {
+        startSystemScreenshotCapture(.selection)
+    }
+
+    func captureFullScreenScreenshot() {
+        startSystemScreenshotCapture(.fullScreen)
+    }
+
+    func openAccessibilityPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
+            return
+        }
+
+        NSWorkspace.shared.open(url)
     }
 
     private func startServices() {
@@ -667,6 +737,141 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                     self?.updateEffectiveColorScheme()
                 }
             }
+        }
+    }
+
+    private func restartScreenshotShortcutCaptureIfNeeded(promptForPermission: Bool = false) {
+        stopScreenshotShortcutCapture()
+        refreshScreenshotShortcutPermission(prompt: promptForPermission)
+
+        guard captureStandardScreenshotShortcutsEnabled else { return }
+        guard screenshotShortcutCapturePermissionGranted else {
+            statusText = "Allow Accessibility access so AirCopy can handle Cmd-Shift-3 and Cmd-Shift-4."
+            return
+        }
+
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else {
+                    return Unmanaged.passUnretained(event)
+                }
+
+                let coordinator = Unmanaged<AirCopyCoordinator>.fromOpaque(userInfo).takeUnretainedValue()
+
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    Task { @MainActor in
+                        coordinator.reenableScreenshotShortcutCaptureIfNeeded()
+                    }
+
+                    return Unmanaged.passUnretained(event)
+                }
+
+                guard let mode = AirCopyCoordinator.screenshotShortcutMode(for: type, event: event) else {
+                    return Unmanaged.passUnretained(event)
+                }
+
+                Task { @MainActor in
+                    coordinator.handleScreenshotShortcut(mode)
+                }
+
+                return nil
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            screenshotShortcutCaptureActive = false
+            statusText = "AirCopy could not attach screenshot shortcuts yet."
+            return
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        screenshotShortcutEventTap = tap
+        screenshotShortcutRunLoopSource = source
+
+        if let source {
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+
+        CGEvent.tapEnable(tap: tap, enable: true)
+        screenshotShortcutCaptureActive = true
+    }
+
+    private func stopScreenshotShortcutCapture() {
+        screenshotShortcutCaptureActive = false
+
+        if let source = screenshotShortcutRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            screenshotShortcutRunLoopSource = nil
+        }
+
+        if let tap = screenshotShortcutEventTap {
+            CFMachPortInvalidate(tap)
+            screenshotShortcutEventTap = nil
+        }
+    }
+
+    private func refreshScreenshotShortcutPermission(prompt: Bool) {
+        screenshotShortcutCapturePermissionGranted = Self.isAccessibilityTrusted(prompt: prompt)
+    }
+
+    private func reenableScreenshotShortcutCaptureIfNeeded() {
+        guard let tap = screenshotShortcutEventTap else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    private func handleScreenshotShortcut(_ mode: ScreenshotShortcutMode) {
+        guard captureStandardScreenshotShortcutsEnabled else { return }
+        guard screenshotShortcutCapturePermissionGranted else {
+            statusText = "Allow Accessibility access so AirCopy can handle standard screenshot shortcuts."
+            return
+        }
+        startSystemScreenshotCapture(mode)
+    }
+
+    private func startSystemScreenshotCapture(_ mode: ScreenshotShortcutMode) {
+        guard activeScreenshotCaptureProcess == nil else { return }
+
+        let arguments: [String]
+        let description: String
+
+        switch mode {
+        case .fullScreen:
+            arguments = ["-c"]
+            description = "Captured full-screen screenshot."
+        case .selection:
+            arguments = ["-i", "-c"]
+            description = "Captured screenshot selection."
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = arguments
+        process.terminationHandler = { [weak self] process in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.activeScreenshotCaptureProcess = nil
+
+                if process.terminationStatus == 0 {
+                    self.statusText = description
+                } else if process.terminationStatus != 1 {
+                    self.statusText = "AirCopy screenshot capture failed."
+                }
+            }
+        }
+
+        do {
+            activeScreenshotCaptureProcess = process
+            try process.run()
+            statusText = mode == .selection
+                ? "Select an area to capture with AirCopy."
+                : "Capturing full-screen screenshot with AirCopy."
+        } catch {
+            activeScreenshotCaptureProcess = nil
+            statusText = "AirCopy could not start screenshot capture."
         }
     }
 
@@ -771,6 +976,24 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
         return true
+    }
+
+    private nonisolated static func screenshotShortcutMode(for type: CGEventType, event: CGEvent) -> ScreenshotShortcutMode? {
+        guard type == .keyDown else { return nil }
+
+        let flags = event.flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate])
+        guard flags.contains(.maskCommand), flags.contains(.maskShift) else { return nil }
+        guard !flags.contains(.maskControl), !flags.contains(.maskAlternate) else { return nil }
+
+        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        switch keyCode {
+        case CGKeyCode(kVK_ANSI_3):
+            return .fullScreen
+        case CGKeyCode(kVK_ANSI_4):
+            return .selection
+        default:
+            return nil
+        }
     }
 
     private func scheduleSyncExpirationTask() {
@@ -1685,6 +1908,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static func frontmostApplicationInfo() -> (bundleID: String?, name: String?) {
         let application = NSWorkspace.shared.frontmostApplication
         return (application?.bundleIdentifier, application?.localizedName)
+    }
+
+    private static func isAccessibilityTrusted(prompt: Bool = false) -> Bool {
+        if prompt {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            return AXIsProcessTrustedWithOptions(options)
+        }
+
+        return AXIsProcessTrusted()
     }
 
     private static func readClipboardPayload(

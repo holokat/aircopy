@@ -668,7 +668,41 @@ private struct AirCopySettingsView: View {
             }
 
             settingsGroup(title: "Standard Screenshots", subtitle: "Make normal macOS screenshot shortcuts behave like live AirCopy items.") {
-                Toggle("Import standard macOS screenshots", isOn: $coordinator.importSystemScreenshotsEnabled)
+                Toggle("AirCopy handles Cmd-Shift-3 and Cmd-Shift-4", isOn: $coordinator.captureStandardScreenshotShortcutsEnabled)
+                    .tint(AirCopyTheme.syncTint(for: colorScheme))
+
+                settingsRow(title: "Shortcut Status", value: coordinator.screenshotShortcutCaptureStatusText)
+
+                if coordinator.captureStandardScreenshotShortcutsEnabled && !coordinator.screenshotShortcutCapturePermissionGranted {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("AirCopy needs Accessibility permission to intercept the standard screenshot keys before macOS handles them.")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        settingsActionButton("Open Accessibility Settings", systemImage: "hand.raised") {
+                            coordinator.openAccessibilityPrivacySettings()
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Capture Now")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    HStack(spacing: 8) {
+                        settingsActionButton("Selection", systemImage: "crop") {
+                            coordinator.captureSelectionScreenshot()
+                        }
+
+                        settingsActionButton("Full Screen", systemImage: "rectangle.expand.vertical") {
+                            coordinator.captureFullScreenScreenshot()
+                        }
+                    }
+                }
+
+                Toggle("Import saved macOS screenshots as a fallback", isOn: $coordinator.importSystemScreenshotsEnabled)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Watched Folder")
@@ -680,7 +714,7 @@ private struct AirCopySettingsView: View {
                         .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
                         .textSelection(.enabled)
 
-                    Text("AirCopy automatically watches your current macOS screenshot location and imports new screenshots into clipboard history and sync.")
+                    Text("AirCopy automatically watches your current macOS screenshot location and imports new screenshots into clipboard history and sync when the system saves a file instead of copying it.")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
                         .fixedSize(horizontal: false, vertical: true)
