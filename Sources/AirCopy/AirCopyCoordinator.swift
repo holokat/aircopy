@@ -856,7 +856,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                 self.activeScreenshotCaptureProcess = nil
 
                 if process.terminationStatus == 0 {
-                    self.statusText = description
+                    self.ingestClipboardAfterScreenshotCapture(description: description)
                 } else if process.terminationStatus != 1 {
                     self.statusText = "AirCopy screenshot capture failed."
                 }
@@ -872,6 +872,28 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         } catch {
             activeScreenshotCaptureProcess = nil
             statusText = "AirCopy could not start screenshot capture."
+        }
+    }
+
+    private func ingestClipboardAfterScreenshotCapture(description: String, attempt: Int = 0) {
+        if consumeClipboardChange(
+            localSource: "Captured with AirCopy screenshot",
+            localImagePausedStatus: "Captured screenshot locally. Image sync is paused.",
+            localSyncOffStatus: "Captured screenshot locally. Sync is off."
+        ) {
+            return
+        }
+
+        guard attempt < 12 else {
+            statusText = description
+            return
+        }
+
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(45))
+            await MainActor.run {
+                self?.ingestClipboardAfterScreenshotCapture(description: description, attempt: attempt + 1)
+            }
         }
     }
 
@@ -1019,13 +1041,22 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func pollClipboard() {
+        _ = consumeClipboardChange()
+    }
+
+    @discardableResult
+    private func consumeClipboardChange(
+        localSource: String = "Copied on this Mac",
+        localImagePausedStatus: String = "Saved image locally. Image sync is paused.",
+        localSyncOffStatus: String = "Saved locally. Sync is off."
+    ) -> Bool {
         let frontmost = Self.frontmostApplicationInfo()
         frontmostApplicationName = frontmost.name ?? "Unknown App"
 
         let pasteboard = NSPasteboard.general
         let changeCount = pasteboard.changeCount
 
-        guard changeCount != lastObservedChangeCount else { return }
+        guard changeCount != lastObservedChangeCount else { return false }
         lastObservedChangeCount = changeCount
 
         guard let payload = Self.readClipboardPayload(
@@ -1035,7 +1066,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             sourceAppName: frontmost.name
         ) else {
             lastKnownPayload = nil
-            return
+            return false
         }
 
         if pendingRemotePayload == payload {
@@ -1048,32 +1079,33 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                 date: Date(),
                 deliveredRemotely: true
             )
-            return
+            return true
         }
 
-        guard payload != lastKnownPayload else { return }
+        guard payload != lastKnownPayload else { return false }
         lastKnownPayload = payload
 
-        guard !shouldSuppressSync(for: payload) else { return }
+        guard !shouldSuppressSync(for: payload) else { return false }
 
         let item = recordHistory(
             payload: payload,
-            source: "Copied on this Mac",
+            source: localSource,
             senderName: localDeviceName,
             date: Date()
         )
 
         if payload.kind == .image && !imageSyncEnabled {
-            statusText = "Saved image locally. Image sync is paused."
-            return
+            statusText = localImagePausedStatus
+            return true
         }
 
         guard syncEnabled else {
-            statusText = "Saved locally. Sync is off."
-            return
+            statusText = localSyncOffStatus
+            return true
         }
 
         sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
+        return true
     }
 
     private func sendPayload(
