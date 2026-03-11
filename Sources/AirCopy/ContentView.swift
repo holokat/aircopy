@@ -430,6 +430,7 @@ private struct MainPeerCard: View {
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case general
     case sync
+    case screenshots
     case privacy
     case devices
     case advanced
@@ -442,6 +443,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "General"
         case .sync:
             return "Sync"
+        case .screenshots:
+            return "Screenshots"
         case .privacy:
             return "Privacy"
         case .devices:
@@ -457,6 +460,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "gearshape"
         case .sync:
             return "arrow.triangle.2.circlepath"
+        case .screenshots:
+            return "camera.viewfinder"
         case .privacy:
             return "lock.shield"
         case .devices:
@@ -472,6 +477,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             return "Basic app preferences and appearance."
         case .sync:
             return "How AirCopy behaves while syncing."
+        case .screenshots:
+            return "Capture and style screenshots before they sync."
         case .privacy:
             return "What AirCopy should never send."
         case .devices:
@@ -672,6 +679,10 @@ private struct AirCopySettingsView: View {
                     .tint(AirCopyTheme.syncTint(for: colorScheme))
 
                 settingsRow(title: "Shortcut Status", value: coordinator.screenshotShortcutCaptureStatusText)
+                settingsRow(
+                    title: "Screen Recording",
+                    value: coordinator.screenshotScreenRecordingPermissionGranted ? "Allowed" : "Needed"
+                )
 
                 if coordinator.captureStandardScreenshotShortcutsEnabled && !coordinator.screenshotShortcutCapturePermissionGranted {
                     VStack(alignment: .leading, spacing: 8) {
@@ -682,6 +693,19 @@ private struct AirCopySettingsView: View {
 
                         settingsActionButton("Open Accessibility Settings", systemImage: "hand.raised") {
                             coordinator.openAccessibilityPrivacySettings()
+                        }
+                    }
+                }
+
+                if !coordinator.screenshotScreenRecordingPermissionGranted {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("AirCopy also needs Screen Recording permission to capture pixels directly instead of waiting for the system screenshot file path.")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        settingsActionButton("Open Screen Recording Settings", systemImage: "rectangle.inset.filled.and.person.filled") {
+                            coordinator.openScreenRecordingPrivacySettings()
                         }
                     }
                 }
@@ -718,6 +742,110 @@ private struct AirCopySettingsView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
                         .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+        case .screenshots:
+            settingsGroup(title: "Screenshot Styling", subtitle: "Frame screenshots with polished backgrounds, privacy cleanup, and share-ready sizing.") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Style AirCopy screenshots", isOn: $coordinator.screenshotStyleSettings.isEnabled)
+
+                    Text("When enabled, AirCopy reframes screenshots before they land in history, sync to another Mac, or save to disk.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            settingsGroup(title: "Preview", subtitle: "A live sample of the treatment you are building.") {
+                ScreenshotStylePreviewCard(
+                    image: coordinator.screenshotStylePreviewImage,
+                    isEnabled: coordinator.screenshotStyleSettings.isEnabled
+                )
+            }
+
+            settingsGroup(title: "Background Presets", subtitle: "Choose a canvas that flatters the screenshot instead of fighting it.") {
+                ScreenshotBackgroundPresetGrid(
+                    selection: $coordinator.screenshotStyleSettings.backgroundPreset
+                )
+
+                if coordinator.screenshotStyleSettings.backgroundPreset == .desktop {
+                    Text("Desktop uses this Mac’s current wallpaper as the backdrop.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                }
+            }
+
+            settingsGroup(title: "Layout", subtitle: "Control the breathing room, output ratio, and export size.") {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Aspect Ratio")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                        Picker("Aspect Ratio", selection: $coordinator.screenshotStyleSettings.aspectRatioPreset) {
+                            ForEach(ScreenshotAspectRatioPreset.allCases) { preset in
+                                Text(preset.title).tag(preset)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Output Size")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                        Picker("Output Size", selection: $coordinator.screenshotStyleSettings.outputSizePreset) {
+                            ForEach(ScreenshotOutputSizePreset.allCases) { preset in
+                                Text(preset.title).tag(preset)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    ScreenshotStyleSliderRow(
+                        title: "Inset Space",
+                        detail: "How much room the screenshot gets inside the framed canvas.",
+                        value: $coordinator.screenshotStyleSettings.insetFraction,
+                        range: 0.06...0.24,
+                        valueLabel: "\(Int(coordinator.screenshotStyleSettings.insetFraction * 100))%"
+                    )
+                }
+            }
+
+            settingsGroup(title: "Finish", subtitle: "Tune the screenshot itself with softer edges, depth, privacy cleanup, and optional branding.") {
+                VStack(alignment: .leading, spacing: 12) {
+                    ScreenshotStyleSliderRow(
+                        title: "Corner Radius",
+                        detail: "Round the screenshot corners to feel more native and intentional.",
+                        value: $coordinator.screenshotStyleSettings.cornerRadius,
+                        range: 8...44,
+                        valueLabel: "\(Int(coordinator.screenshotStyleSettings.cornerRadius)) px"
+                    )
+
+                    ScreenshotStyleSliderRow(
+                        title: "Shadow",
+                        detail: "Add separation from the background without making it heavy.",
+                        value: $coordinator.screenshotStyleSettings.shadowStrength,
+                        range: 0...1,
+                        valueLabel: "\(Int(coordinator.screenshotStyleSettings.shadowStrength * 100))%"
+                    )
+
+                    Toggle("Redact email addresses", isOn: $coordinator.screenshotStyleSettings.redactEmailAddresses)
+
+                    Toggle("Show watermark", isOn: $coordinator.screenshotStyleSettings.showWatermark)
+
+                    if coordinator.screenshotStyleSettings.showWatermark {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Watermark Text")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                            TextField("AirCopy", text: $coordinator.screenshotStyleSettings.watermarkText)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
                 }
             }
 
@@ -923,6 +1051,150 @@ private struct SettingsPeerRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Color.white.opacity(colorScheme == .light ? 0.9 : 0.08), in: Capsule())
+    }
+}
+
+private struct ScreenshotStylePreviewCard: View {
+    let image: NSImage?
+    let isEnabled: Bool
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Group {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                } else {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AirCopyTheme.insetFill(for: colorScheme))
+                        .frame(height: 220)
+                        .overlay {
+                            Text("Preview unavailable")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                        }
+                }
+            }
+            .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            Text(
+                isEnabled
+                    ? "New screenshots will use this look before they sync or save."
+                    : "Preview is live while you tune it. Turn on styling above when you are ready to apply it."
+            )
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+        }
+    }
+}
+
+private struct ScreenshotBackgroundPresetGrid: View {
+    @Binding var selection: ScreenshotBackgroundPreset
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(ScreenshotBackgroundPreset.allCases) { preset in
+                let isSelected = selection == preset
+
+                Button {
+                    selection = preset
+                } label: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Group {
+                            if let previewImage = ScreenshotStyleRenderer.backgroundPreviewImage(for: preset) {
+                                Image(nsImage: previewImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(AirCopyTheme.insetFill(for: colorScheme))
+                            }
+                        }
+                        .frame(height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        HStack(spacing: 6) {
+                            Text(preset.title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                            Spacer(minLength: 0)
+
+                            if isSelected {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(AirCopyTheme.highlight(for: colorScheme))
+                            }
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        isSelected
+                            ? AirCopyTheme.panelFill(for: colorScheme)
+                            : AirCopyTheme.insetFill(for: colorScheme),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(
+                                isSelected
+                                    ? AirCopyTheme.highlight(for: colorScheme).opacity(0.42)
+                                    : Color.clear,
+                                lineWidth: 1.5
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+private struct ScreenshotStyleSliderRow: View {
+    let title: String
+    let detail: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let valueLabel: String
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                Spacer()
+
+                Text(valueLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AirCopyTheme.highlight(for: colorScheme))
+            }
+
+            Slider(value: $value, in: range)
+                .tint(AirCopyTheme.highlight(for: colorScheme))
+
+            Text(detail)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

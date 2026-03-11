@@ -40,6 +40,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
+    @Published var screenshotStyleSettings = ScreenshotStyleSettings() {
+        didSet {
+            persistScreenshotStyleSettings()
+        }
+    }
+
     @Published var importSystemScreenshotsEnabled = true {
         didSet {
             UserDefaults.standard.set(importSystemScreenshotsEnabled, forKey: Self.importSystemScreenshotsEnabledKey)
@@ -124,6 +130,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var frontmostApplicationName: String
     @Published private(set) var excludedApplications: [AppExclusion] = []
     @Published private(set) var screenshotShortcutCapturePermissionGranted = false
+    @Published private(set) var screenshotScreenRecordingPermissionGranted = false
     @Published private(set) var screenshotShortcutCaptureActive = false
 
     private let serviceType = "aircopy"
@@ -132,6 +139,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private let maxHistoryItems = 64
     private let maxInlineAttachmentBytes: Int64 = 8 * 1024 * 1024
     private let inviteRetryInterval: TimeInterval = 3
+    private let nativeScreenshotCapture = NativeScreenshotCaptureController()
     private let protectedPasswordManagerBundleIDs: Set<String> = [
         "com.1password.1password",
         "com.agilebits.onepassword7",
@@ -168,7 +176,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var screenshotImportTask: Task<Void, Never>?
     nonisolated(unsafe) private var screenshotShortcutEventTap: CFMachPort?
     nonisolated(unsafe) private var screenshotShortcutRunLoopSource: CFRunLoopSource?
-    private var activeScreenshotCaptureProcess: Process?
     private var clearCopiedStateTask: Task<Void, Never>?
     private var lastObservedChangeCount: Int
     private var lastKnownPayload: ClipboardPayload?
@@ -180,6 +187,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static let imageSyncEnabledKey = "image-sync-enabled"
     private static let importSystemScreenshotsEnabledKey = "import-system-screenshots-enabled"
     private static let captureStandardScreenshotShortcutsEnabledKey = "capture-standard-screenshot-shortcuts-enabled"
+    private static let screenshotStyleSettingsKey = "screenshot-style-settings"
     private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
     private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
     private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
@@ -201,12 +209,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let storedAppearance = defaults.string(forKey: Self.appearancePreferenceKey)
         let appearance = AppearancePreference(rawValue: storedAppearance ?? "") ?? .automatic
         let frontmost = Self.frontmostApplicationInfo()
+        let loadedScreenshotStyleSettings = Self.loadScreenshotStyleSettings(forKey: Self.screenshotStyleSettingsKey)
 
         self.localDeviceName = resolvedName
         self.appearancePreference = appearance
         self.deviceID = Self.loadOrCreateDeviceID()
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
+        self.screenshotStyleSettings = loadedScreenshotStyleSettings
         self.importSystemScreenshotsEnabled = defaults.object(forKey: Self.importSystemScreenshotsEnabledKey) as? Bool ?? true
         self.captureStandardScreenshotShortcutsEnabled =
             defaults.object(forKey: Self.captureStandardScreenshotShortcutsEnabledKey) as? Bool ?? false
@@ -218,6 +228,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             ?? Self.defaultSavedItemsBaseDirectory.path
         self.requireDeviceApproval = defaults.object(forKey: Self.requireDeviceApprovalKey) as? Bool ?? true
         self.screenshotShortcutCapturePermissionGranted = Self.isAccessibilityTrusted()
+        self.screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.preflightPermission()
         self.temporarySyncUntil = defaults.object(forKey: Self.temporarySyncUntilKey) as? Date
         self.trustedDeviceIDs = Self.loadStringSet(forKey: Self.trustedDeviceIDsKey)
         self.blockedDeviceIDs = Self.loadStringSet(forKey: Self.blockedDeviceIDsKey)
@@ -289,7 +300,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             screenshotShortcutEventTap = nil
         }
 
-        activeScreenshotCaptureProcess?.terminate()
         clearCopiedStateTask?.cancel()
     }
 
@@ -371,11 +381,19 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return "Off"
         }
 
-        if screenshotShortcutCaptureActive {
-            return "Ready"
+        if !screenshotShortcutCapturePermissionGranted {
+            return "Needs Accessibility permission"
         }
 
-        return screenshotShortcutCapturePermissionGranted ? "Waiting to attach" : "Needs Accessibility permission"
+        if !screenshotScreenRecordingPermissionGranted {
+            return "Needs Screen Recording permission"
+        }
+
+        return screenshotShortcutCaptureActive ? "Ready" : "Waiting to attach"
+    }
+
+    var screenshotStylePreviewImage: NSImage? {
+        ScreenshotStyleRenderer.previewImage(using: screenshotStyleSettings)
     }
 
     var savedItemsDirectoryDisplayPath: String {
@@ -652,6 +670,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     func showMainWindow() {
         refreshScreenshotShortcutPermission(prompt: false)
+        refreshScreenshotScreenRecordingPermission()
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first {
             window.orderFrontRegardless()
@@ -665,15 +684,23 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func captureSelectionScreenshot() {
-        startSystemScreenshotCapture(.selection)
+        beginNativeScreenshotCapture(.selection, triggeredByShortcut: false)
     }
 
     func captureFullScreenScreenshot() {
-        startSystemScreenshotCapture(.fullScreen)
+        beginNativeScreenshotCapture(.fullScreen, triggeredByShortcut: false)
     }
 
     func openAccessibilityPrivacySettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
+            return
+        }
+
+        NSWorkspace.shared.open(url)
+    }
+
+    func openScreenRecordingPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
             return
         }
 
@@ -818,6 +845,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         screenshotShortcutCapturePermissionGranted = Self.isAccessibilityTrusted(prompt: prompt)
     }
 
+    private func refreshScreenshotScreenRecordingPermission() {
+        screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.preflightPermission()
+    }
+
     private func reenableScreenshotShortcutCaptureIfNeeded() {
         guard let tap = screenshotShortcutEventTap else { return }
         CGEvent.tapEnable(tap: tap, enable: true)
@@ -829,91 +860,33 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             statusText = "Allow Accessibility access so AirCopy can handle standard screenshot shortcuts."
             return
         }
-        startSystemScreenshotCapture(mode)
+        beginNativeScreenshotCapture(mode, triggeredByShortcut: true)
     }
 
-    private func startSystemScreenshotCapture(_ mode: ScreenshotShortcutMode) {
-        guard activeScreenshotCaptureProcess == nil else { return }
+    private func beginNativeScreenshotCapture(_ mode: ScreenshotShortcutMode, triggeredByShortcut: Bool) {
+        let captureMode: NativeScreenshotCaptureMode = mode == .selection ? .selection : .currentDisplay
+        refreshScreenshotScreenRecordingPermission()
 
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("aircopy-capture-\(UUID().uuidString).png")
+        statusText = mode == .selection
+            ? "Select an area to capture with AirCopy."
+            : "Capturing the current display with AirCopy."
 
-        let arguments: [String]
-        let description: String
+        nativeScreenshotCapture.capture(captureMode, promptForPermission: true) { [weak self] result in
+            guard let self else { return }
+            self.refreshScreenshotScreenRecordingPermission()
 
-        switch mode {
-        case .fullScreen:
-            arguments = [outputURL.path]
-            description = "Captured full-screen screenshot."
-        case .selection:
-            arguments = ["-i", outputURL.path]
-            description = "Captured screenshot selection."
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = arguments
-        process.terminationHandler = { [weak self] process in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.activeScreenshotCaptureProcess = nil
-
-                if process.terminationStatus == 0 {
-                    self.ingestCapturedScreenshotFile(at: outputURL, description: description)
-                } else if process.terminationStatus != 1 {
-                    self.statusText = "AirCopy screenshot capture failed."
-                }
-
-                try? FileManager.default.removeItem(at: outputURL)
-            }
-        }
-
-        do {
-            activeScreenshotCaptureProcess = process
-            try process.run()
-            statusText = mode == .selection
-                ? "Select an area to capture with AirCopy."
-                : "Capturing full-screen screenshot with AirCopy."
-        } catch {
-            activeScreenshotCaptureProcess = nil
-            statusText = "AirCopy could not start screenshot capture."
-        }
-    }
-
-    private func ingestCapturedScreenshotFile(at fileURL: URL, description: String, attempt: Int = 0) {
-        guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty, NSImage(data: imageData) != nil else {
-            guard attempt < 12 else {
-                statusText = description
-                return
-            }
-
-            Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(30))
-                await MainActor.run {
-                    self?.ingestCapturedScreenshotFile(at: fileURL, description: description, attempt: attempt + 1)
-                }
-            }
-            return
-        }
-
-        if ingestLocalScreenshotPayload(
-            imageData: imageData,
-            source: "Captured with AirCopy screenshot",
-            imagePausedStatus: "Captured screenshot locally. Image sync is paused.",
-            syncOffStatus: "Captured screenshot locally. Sync is off."
-        ) {
-            return
-        }
-
-        guard attempt < 12 else {
-            statusText = description
-            return
-        }
-
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(30))
-            await MainActor.run {
-                self?.ingestCapturedScreenshotFile(at: fileURL, description: description, attempt: attempt + 1)
+            switch result {
+            case .success(let imageData):
+                _ = self.ingestLocalScreenshotPayload(
+                    imageData: imageData,
+                    source: triggeredByShortcut
+                        ? "Captured with AirCopy shortcut"
+                        : "Captured with AirCopy",
+                    imagePausedStatus: "Captured screenshot locally. Image sync is paused.",
+                    syncOffStatus: "Captured screenshot locally. Sync is off."
+                )
+            case .failure(let error):
+                self.statusText = error.errorDescription ?? "AirCopy screenshot capture failed."
             }
         }
     }
@@ -1005,10 +978,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         imagePausedStatus: String,
         syncOffStatus: String
     ) -> Bool {
-        guard NSImage(data: imageData) != nil else { return false }
+        let processedImageData = processedScreenshotImageData(from: imageData)
+        guard NSImage(data: processedImageData) != nil else { return false }
 
         let payload = ClipboardPayload(
-            imageData: imageData,
+            imageData: processedImageData,
             sourceAppBundleID: nil,
             sourceAppName: "Screenshot"
         )
@@ -1036,6 +1010,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
         return true
+    }
+
+    private func processedScreenshotImageData(from imageData: Data) -> Data {
+        ScreenshotStyleRenderer.styledImageData(
+            from: imageData,
+            settings: screenshotStyleSettings,
+            sourceAppBundleID: "dev.aircopy.screenshot",
+            sourceAppName: "Screenshot"
+        )
     }
 
     private nonisolated static func screenshotShortcutMode(for type: CGEventType, event: CGEvent) -> ScreenshotShortcutMode? {
@@ -1944,6 +1927,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             .sorted { $0.appName.localizedCaseInsensitiveCompare($1.appName) == .orderedAscending }
     }
 
+    private func persistScreenshotStyleSettings() {
+        guard let data = try? JSONEncoder().encode(screenshotStyleSettings) else { return }
+        UserDefaults.standard.set(data, forKey: Self.screenshotStyleSettingsKey)
+    }
+
     private func saveStringSet(_ set: Set<String>, key: String) {
         UserDefaults.standard.set(Array(set).sorted(), forKey: key)
     }
@@ -1960,6 +1948,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return map
+    }
+
+    private static func loadScreenshotStyleSettings(forKey key: String) -> ScreenshotStyleSettings {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let settings = try? JSONDecoder().decode(ScreenshotStyleSettings.self, from: data) else {
+            return ScreenshotStyleSettings()
+        }
+
+        return settings
     }
 
     private static func loadOrCreateDeviceID() -> String {
