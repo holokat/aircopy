@@ -489,12 +489,32 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     }
 }
 
+private enum ScreenshotControlsSection: String, CaseIterable, Identifiable {
+    case look
+    case frame
+    case privacy
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .look:
+            return "Look"
+        case .frame:
+            return "Frame"
+        case .privacy:
+            return "Privacy"
+        }
+    }
+}
+
 private struct AirCopySettingsView: View {
     @EnvironmentObject private var coordinator: AirCopyCoordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var selectedSection: SettingsSection = .general
+    @State private var selectedScreenshotControls: ScreenshotControlsSection = .look
 
     var body: some View {
         HStack(spacing: 0) {
@@ -747,85 +767,22 @@ private struct AirCopySettingsView: View {
 
         case .screenshots:
             settingsGroup(title: "Screenshot Styling", subtitle: "Frame AirCopy screenshots without a long settings page.") {
-                HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Toggle("Style AirCopy screenshots", isOn: $coordinator.screenshotStyleSettings.isEnabled)
+
                     ScreenshotStylePreviewCard(
                         image: coordinator.screenshotStylePreviewImage,
                         isEnabled: coordinator.screenshotStyleSettings.isEnabled
                     )
-                    .frame(width: 320)
 
-                    VStack(alignment: .leading, spacing: 14) {
-                        Toggle("Style AirCopy screenshots", isOn: $coordinator.screenshotStyleSettings.isEnabled)
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Background")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
-
-                            ScreenshotBackgroundPresetStrip(
-                                selection: $coordinator.screenshotStyleSettings.backgroundPreset
-                            )
-
-                            if coordinator.screenshotStyleSettings.backgroundPreset == .desktop {
-                                Text("Desktop uses this Mac’s current wallpaper.")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                            }
-                        }
-
-                        HStack(alignment: .top, spacing: 12) {
-                            compactPickerCard(title: "Aspect Ratio") {
-                                Picker("Aspect Ratio", selection: $coordinator.screenshotStyleSettings.aspectRatioPreset) {
-                                    ForEach(ScreenshotAspectRatioPreset.allCases) { preset in
-                                        Text(preset.title).tag(preset)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                            }
-
-                            compactPickerCard(title: "Output Size") {
-                                Picker("Output Size", selection: $coordinator.screenshotStyleSettings.outputSizePreset) {
-                                    ForEach(ScreenshotOutputSizePreset.allCases) { preset in
-                                        Text(preset.title).tag(preset)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            ScreenshotStyleSliderRow(
-                                title: "Inset",
-                                value: $coordinator.screenshotStyleSettings.insetFraction,
-                                range: 0.06...0.24,
-                                valueLabel: "\(Int(coordinator.screenshotStyleSettings.insetFraction * 100))%"
-                            )
-
-                            ScreenshotStyleSliderRow(
-                                title: "Radius",
-                                value: $coordinator.screenshotStyleSettings.cornerRadius,
-                                range: 8...44,
-                                valueLabel: "\(Int(coordinator.screenshotStyleSettings.cornerRadius)) px"
-                            )
-
-                            ScreenshotStyleSliderRow(
-                                title: "Shadow",
-                                value: $coordinator.screenshotStyleSettings.shadowStrength,
-                                range: 0...1,
-                                valueLabel: "\(Int(coordinator.screenshotStyleSettings.shadowStrength * 100))%"
-                            )
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Toggle("Redact email addresses", isOn: $coordinator.screenshotStyleSettings.redactEmailAddresses)
-                            Toggle("Show watermark", isOn: $coordinator.screenshotStyleSettings.showWatermark)
-
-                            if coordinator.screenshotStyleSettings.showWatermark {
-                                TextField("Watermark text", text: $coordinator.screenshotStyleSettings.watermarkText)
-                                    .textFieldStyle(.roundedBorder)
-                            }
+                    Picker("Screenshot Controls", selection: $selectedScreenshotControls) {
+                        ForEach(ScreenshotControlsSection.allCases) { section in
+                            Text(section.title).tag(section)
                         }
                     }
+                    .pickerStyle(.segmented)
+
+                    screenshotControlsDetail
                 }
             }
 
@@ -895,6 +852,86 @@ private struct AirCopySettingsView: View {
                     settingsActionButton("Clear Local History", systemImage: "xmark.bin") {
                         coordinator.clearHistory()
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var screenshotControlsDetail: some View {
+        switch selectedScreenshotControls {
+        case .look:
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Background")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    ScreenshotBackgroundPresetStrip(
+                        selection: $coordinator.screenshotStyleSettings.backgroundPreset
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if coordinator.screenshotStyleSettings.backgroundPreset == .desktop {
+                        Text("Desktop uses this Mac’s current wallpaper.")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    compactPickerCard(title: "Aspect Ratio") {
+                        Picker("Aspect Ratio", selection: $coordinator.screenshotStyleSettings.aspectRatioPreset) {
+                            ForEach(ScreenshotAspectRatioPreset.allCases) { preset in
+                                Text(preset.title).tag(preset)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    compactPickerCard(title: "Output Size") {
+                        Picker("Output Size", selection: $coordinator.screenshotStyleSettings.outputSizePreset) {
+                            ForEach(ScreenshotOutputSizePreset.allCases) { preset in
+                                Text(preset.title).tag(preset)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+            }
+
+        case .frame:
+            VStack(alignment: .leading, spacing: 10) {
+                ScreenshotStyleSliderRow(
+                    title: "Inset",
+                    value: $coordinator.screenshotStyleSettings.insetFraction,
+                    range: 0.06...0.24,
+                    valueLabel: "\(Int(coordinator.screenshotStyleSettings.insetFraction * 100))%"
+                )
+
+                ScreenshotStyleSliderRow(
+                    title: "Radius",
+                    value: $coordinator.screenshotStyleSettings.cornerRadius,
+                    range: 8...44,
+                    valueLabel: "\(Int(coordinator.screenshotStyleSettings.cornerRadius)) px"
+                )
+
+                ScreenshotStyleSliderRow(
+                    title: "Shadow",
+                    value: $coordinator.screenshotStyleSettings.shadowStrength,
+                    range: 0...1,
+                    valueLabel: "\(Int(coordinator.screenshotStyleSettings.shadowStrength * 100))%"
+                )
+            }
+
+        case .privacy:
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("Redact email addresses", isOn: $coordinator.screenshotStyleSettings.redactEmailAddresses)
+                Toggle("Show watermark", isOn: $coordinator.screenshotStyleSettings.showWatermark)
+
+                if coordinator.screenshotStyleSettings.showWatermark {
+                    TextField("Watermark text", text: $coordinator.screenshotStyleSettings.watermarkText)
+                        .textFieldStyle(.roundedBorder)
                 }
             }
         }
@@ -1060,7 +1097,7 @@ private struct ScreenshotStylePreviewCard: View {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: 208)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 } else {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
