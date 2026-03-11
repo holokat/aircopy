@@ -31,6 +31,11 @@ enum NativeScreenshotCaptureError: LocalizedError {
 final class NativeScreenshotCaptureController: NSObject {
     typealias Completion = (Result<Data, NativeScreenshotCaptureError>) -> Void
 
+    private struct CaptureRequest: Sendable {
+        let displayID: CGDirectDisplayID
+        let pixelRect: CGRect?
+    }
+
     private var overlayWindows: [ScreenshotOverlayWindow] = []
     private var keyMonitor: Any?
     private var completion: Completion?
@@ -79,12 +84,12 @@ final class NativeScreenshotCaptureController: NSObject {
             return
         }
 
-        guard let imageData = captureImageData(on: screen, screenRect: nil) else {
+        guard let request = captureRequest(on: screen, screenRect: nil) else {
             finish(.failure(.captureFailed))
             return
         }
 
-        finish(.success(imageData))
+        performCapture(request)
     }
 
     private func beginSelectionCapture() {
@@ -120,12 +125,12 @@ final class NativeScreenshotCaptureController: NSObject {
             return
         }
 
-        guard let imageData = captureImageData(on: screen, screenRect: rect) else {
+        guard let request = captureRequest(on: screen, screenRect: rect) else {
             finish(.failure(.captureFailed))
             return
         }
 
-        finish(.success(imageData))
+        performCapture(request)
     }
 
     private func finish(_ result: Result<Data, NativeScreenshotCaptureError>) {
@@ -149,20 +154,46 @@ final class NativeScreenshotCaptureController: NSObject {
         overlayWindows.removeAll()
     }
 
-    private func captureImageData(on screen: NSScreen, screenRect: CGRect?) -> Data? {
+    private func captureRequest(on screen: NSScreen, screenRect: CGRect?) -> CaptureRequest? {
         guard let displayID = screen.aircopyDisplayID else { return nil }
 
-        let cgImage: CGImage?
+        let pixelRect: CGRect?
         if let screenRect {
-            let pixelRect = screen.pixelRect(for: screenRect).integral
-            guard pixelRect.width > 0, pixelRect.height > 0 else { return nil }
-            cgImage = CGDisplayCreateImage(displayID, rect: pixelRect)
+            let resolvedRect = screen.pixelRect(for: screenRect).integral
+            guard resolvedRect.width > 0, resolvedRect.height > 0 else { return nil }
+            pixelRect = resolvedRect
         } else {
-            cgImage = CGDisplayCreateImage(displayID)
+            pixelRect = nil
+        }
+
+        return CaptureRequest(displayID: displayID, pixelRect: pixelRect)
+    }
+
+    private func performCapture(_ request: CaptureRequest) {
+        Task.detached(priority: .userInitiated) { [request] in
+            let result: Result<Data, NativeScreenshotCaptureError>
+            if let imageData = Self.captureImageData(for: request) {
+                result = .success(imageData)
+            } else {
+                result = .failure(.captureFailed)
+            }
+
+            await MainActor.run {
+                self.finish(result)
+            }
+        }
+    }
+
+    private nonisolated static func captureImageData(for request: CaptureRequest) -> Data? {
+        let cgImage: CGImage?
+        if let pixelRect = request.pixelRect {
+            cgImage = CGDisplayCreateImage(request.displayID, rect: pixelRect)
+        } else {
+            cgImage = CGDisplayCreateImage(request.displayID)
         }
 
         guard let cgImage else { return nil }
-        return Self.pngData(from: cgImage)
+        return fastImageData(from: cgImage)
     }
 
     private func screenUnderPointer() -> NSScreen? {
@@ -170,8 +201,12 @@ final class NativeScreenshotCaptureController: NSObject {
         return NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) })
     }
 
-    private static func pngData(from image: CGImage) -> Data? {
+    private nonisolated static func fastImageData(from image: CGImage) -> Data? {
         let rep = NSBitmapImageRep(cgImage: image)
+        if let tiffData = rep.representation(using: .tiff, properties: [:]), !tiffData.isEmpty {
+            return tiffData
+        }
+
         return rep.representation(using: .png, properties: [:])
     }
 }

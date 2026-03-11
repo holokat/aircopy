@@ -991,25 +991,23 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         imagePausedStatus: String,
         syncOffStatus: String
     ) -> Bool {
-        let processedImageData = processedScreenshotImageData(from: imageData)
-        guard NSImage(data: processedImageData) != nil else { return false }
+        guard NSImage(data: imageData) != nil else { return false }
 
         let payload = ClipboardPayload(
-            imageData: processedImageData,
+            imageData: imageData,
             sourceAppBundleID: nil,
             sourceAppName: "Screenshot"
         )
 
         pendingRemotePayload = nil
         lastKnownPayload = payload
-        writePayloadToPasteboard(payload)
-
         let item = recordHistory(
             payload: payload,
             source: source,
             senderName: localDeviceName,
             date: Date()
         )
+        writePayloadToPasteboard(payload)
 
         if !imageSyncEnabled {
             statusText = imagePausedStatus
@@ -1021,17 +1019,21 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return true
         }
 
-        sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
+        statusText = "Screenshot captured."
+        schedulePayloadSend(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
         return true
     }
 
-    private func processedScreenshotImageData(from imageData: Data) -> Data {
-        ScreenshotStyleRenderer.styledImageData(
-            from: imageData,
-            settings: screenshotStyleSettings,
-            sourceAppBundleID: "dev.aircopy.screenshot",
-            sourceAppName: "Screenshot"
-        )
+    private func schedulePayloadSend(
+        _ payload: ClipboardPayload,
+        toDeviceIDs targetDeviceIDs: [String],
+        historyItemID: UUID?
+    ) {
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            self.sendPayload(payload, toDeviceIDs: targetDeviceIDs, historyItemID: historyItemID)
+        }
     }
 
     private nonisolated static func screenshotShortcutMode(for type: CGEventType, event: CGEvent) -> ScreenshotShortcutMode? {
