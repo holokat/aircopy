@@ -835,15 +835,18 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private func startSystemScreenshotCapture(_ mode: ScreenshotShortcutMode) {
         guard activeScreenshotCaptureProcess == nil else { return }
 
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aircopy-capture-\(UUID().uuidString).png")
+
         let arguments: [String]
         let description: String
 
         switch mode {
         case .fullScreen:
-            arguments = ["-c"]
+            arguments = [outputURL.path]
             description = "Captured full-screen screenshot."
         case .selection:
-            arguments = ["-i", "-c"]
+            arguments = ["-i", outputURL.path]
             description = "Captured screenshot selection."
         }
 
@@ -856,10 +859,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                 self.activeScreenshotCaptureProcess = nil
 
                 if process.terminationStatus == 0 {
-                    self.ingestClipboardAfterScreenshotCapture(description: description)
+                    self.ingestCapturedScreenshotFile(at: outputURL, description: description)
                 } else if process.terminationStatus != 1 {
                     self.statusText = "AirCopy screenshot capture failed."
                 }
+
+                try? FileManager.default.removeItem(at: outputURL)
             }
         }
 
@@ -875,11 +880,27 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
-    private func ingestClipboardAfterScreenshotCapture(description: String, attempt: Int = 0) {
-        if consumeClipboardChange(
-            localSource: "Captured with AirCopy screenshot",
-            localImagePausedStatus: "Captured screenshot locally. Image sync is paused.",
-            localSyncOffStatus: "Captured screenshot locally. Sync is off."
+    private func ingestCapturedScreenshotFile(at fileURL: URL, description: String, attempt: Int = 0) {
+        guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty, NSImage(data: imageData) != nil else {
+            guard attempt < 12 else {
+                statusText = description
+                return
+            }
+
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(30))
+                await MainActor.run {
+                    self?.ingestCapturedScreenshotFile(at: fileURL, description: description, attempt: attempt + 1)
+                }
+            }
+            return
+        }
+
+        if ingestLocalScreenshotPayload(
+            imageData: imageData,
+            source: "Captured with AirCopy screenshot",
+            imagePausedStatus: "Captured screenshot locally. Image sync is paused.",
+            syncOffStatus: "Captured screenshot locally. Sync is off."
         ) {
             return
         }
@@ -890,9 +911,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(45))
+            try? await Task.sleep(for: .milliseconds(30))
             await MainActor.run {
-                self?.ingestClipboardAfterScreenshotCapture(description: description, attempt: attempt + 1)
+                self?.ingestCapturedScreenshotFile(at: fileURL, description: description, attempt: attempt + 1)
             }
         }
     }
@@ -969,6 +990,23 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else { return false }
         guard NSImage(data: imageData) != nil else { return false }
 
+        return ingestLocalScreenshotPayload(
+            imageData: imageData,
+            source: "Imported from macOS screenshot",
+            imagePausedStatus: "Imported screenshot locally. Image sync is paused.",
+            syncOffStatus: "Imported screenshot locally. Sync is off."
+        )
+    }
+
+    @discardableResult
+    private func ingestLocalScreenshotPayload(
+        imageData: Data,
+        source: String,
+        imagePausedStatus: String,
+        syncOffStatus: String
+    ) -> Bool {
+        guard NSImage(data: imageData) != nil else { return false }
+
         let payload = ClipboardPayload(
             imageData: imageData,
             sourceAppBundleID: nil,
@@ -981,18 +1019,18 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         let item = recordHistory(
             payload: payload,
-            source: "Imported from macOS screenshot",
+            source: source,
             senderName: localDeviceName,
             date: Date()
         )
 
         if !imageSyncEnabled {
-            statusText = "Imported screenshot locally. Image sync is paused."
+            statusText = imagePausedStatus
             return true
         }
 
         guard syncEnabled else {
-            statusText = "Imported screenshot locally. Sync is off."
+            statusText = syncOffStatus
             return true
         }
 
