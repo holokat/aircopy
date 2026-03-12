@@ -14,6 +14,18 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         case selection
     }
 
+    struct ScreenshotDebugEvent: Identifiable, Hashable {
+        let id = UUID()
+        let timestamp: Date
+        let message: String
+    }
+
+    private struct ScreenshotTrace {
+        let origin: String
+        let startedAt: Date
+        var lastMarkAt: Date
+    }
+
     private enum SaveReceivedPayloadResult {
         case skipped
         case saved(String)
@@ -119,6 +131,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var appIconImage: NSImage?
     @Published private(set) var screenshotStylePreviewImage: NSImage?
     @Published private(set) var imageThumbnailByFingerprint: [String: NSImage] = [:]
+    @Published private(set) var screenshotDebugSummary = "No screenshot activity yet."
+    @Published private(set) var screenshotDebugEvents: [ScreenshotDebugEvent] = []
     @Published private(set) var savedItemsBaseDirectoryPath: String
     @Published private(set) var temporarySyncUntil: Date? {
         didSet {
@@ -693,11 +707,13 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func captureSelectionScreenshot() {
-        beginNativeScreenshotCapture(.selection, triggeredByShortcut: false)
+        let trace = beginScreenshotTrace(origin: "Manual selection capture")
+        beginNativeScreenshotCapture(.selection, triggeredByShortcut: false, trace: trace)
     }
 
     func captureFullScreenScreenshot() {
-        beginNativeScreenshotCapture(.fullScreen, triggeredByShortcut: false)
+        let trace = beginScreenshotTrace(origin: "Manual full-screen capture")
+        beginNativeScreenshotCapture(.fullScreen, triggeredByShortcut: false, trace: trace)
     }
 
     func openAccessibilityPrivacySettings() {
@@ -714,6 +730,27 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         NSWorkspace.shared.open(url)
+    }
+
+    func copyScreenshotDiagnostics() {
+        let lines = screenshotDebugEvents.map {
+            "\($0.timestamp.formatted(date: .omitted, time: .standard))  \($0.message)"
+        }
+
+        let report = [
+            "Summary: \(screenshotDebugSummary)",
+            "Shortcut status: \(screenshotShortcutCaptureStatusText)",
+            "Screen Recording: \(screenshotScreenRecordingPermissionGranted ? "Allowed" : "Needed")",
+            "Import fallback: \(importSystemScreenshotsEnabled ? "On" : "Off")",
+            "Watched folder: \(screenshotImportFolderDisplayPath)",
+            "",
+            lines.joined(separator: "\n")
+        ]
+        .joined(separator: "\n")
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        statusText = "Copied screenshot diagnostics."
     }
 
     private func startServices() {
@@ -881,12 +918,25 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             statusText = "Allow Accessibility access so AirCopy can handle standard screenshot shortcuts."
             return
         }
-        beginNativeScreenshotCapture(mode, triggeredByShortcut: true)
+        let origin = mode == .selection ? "Shortcut selection capture" : "Shortcut full-screen capture"
+        let trace = beginScreenshotTrace(origin: origin)
+        beginNativeScreenshotCapture(mode, triggeredByShortcut: true, trace: trace)
     }
 
-    private func beginNativeScreenshotCapture(_ mode: ScreenshotShortcutMode, triggeredByShortcut: Bool) {
+    private func beginNativeScreenshotCapture(
+        _ mode: ScreenshotShortcutMode,
+        triggeredByShortcut: Bool,
+        trace: ScreenshotTrace?
+    ) {
         let captureMode: NativeScreenshotCaptureMode = mode == .selection ? .selection : .currentDisplay
         refreshScreenshotScreenRecordingPermission()
+        var trace = trace ?? beginScreenshotTrace(
+            origin: mode == .selection ? "Selection capture" : "Full-screen capture"
+        )
+        markScreenshotTrace(
+            &trace,
+            mode == .selection ? "Waiting for selection" : "Starting capture"
+        )
 
         statusText = mode == .selection
             ? "Select an area to capture with AirCopy."
@@ -898,15 +948,21 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
             switch result {
             case .success(let imageData):
+                self.markScreenshotTrace(
+                    &trace,
+                    "Pixels ready (\(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file)))"
+                )
                 _ = self.ingestLocalScreenshotPayload(
                     imageData: imageData,
                     source: triggeredByShortcut
                         ? "Captured with AirCopy shortcut"
                         : "Captured with AirCopy",
                     imagePausedStatus: "Captured screenshot locally. Image sync is paused.",
-                    syncOffStatus: "Captured screenshot locally. Sync is off."
+                    syncOffStatus: "Captured screenshot locally. Sync is off.",
+                    trace: trace
                 )
             case .failure(let error):
+                self.finishScreenshotTrace(trace, outcome: "Failed: \(error.errorDescription ?? "Capture failed")")
                 self.statusText = error.errorDescription ?? "AirCopy screenshot capture failed."
             }
         }
@@ -979,16 +1035,31 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     @discardableResult
     private func importScreenshotFile(at fileURL: URL) -> Bool {
-        let age = Date().timeIntervalSince(screenshotTimestamp(for: fileURL))
+        let fileTimestamp = screenshotTimestamp(for: fileURL)
+        var trace = beginScreenshotTrace(
+            origin: "Fallback screenshot import",
+            startedAt: fileTimestamp
+        )
+        markScreenshotTrace(&trace, "Detected \(fileURL.lastPathComponent)")
+
+        let age = Date().timeIntervalSince(fileTimestamp)
         guard age >= 0.35 else { return false }
-        guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else { return false }
-        guard NSImage(data: imageData) != nil else { return false }
+        markScreenshotTrace(&trace, "File age at import \(Self.screenshotDebugDurationLabel(age))")
+        guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else {
+            finishScreenshotTrace(trace, outcome: "Failed to read screenshot file")
+            return false
+        }
+        guard NSImage(data: imageData) != nil else {
+            finishScreenshotTrace(trace, outcome: "File was not a readable image")
+            return false
+        }
 
         return ingestLocalScreenshotPayload(
             imageData: imageData,
             source: "Imported from macOS screenshot",
             imagePausedStatus: "Imported screenshot locally. Image sync is paused.",
-            syncOffStatus: "Imported screenshot locally. Sync is off."
+            syncOffStatus: "Imported screenshot locally. Sync is off.",
+            trace: trace
         )
     }
 
@@ -997,9 +1068,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         imageData: Data,
         source: String,
         imagePausedStatus: String,
-        syncOffStatus: String
+        syncOffStatus: String,
+        trace: ScreenshotTrace?
     ) -> Bool {
-        guard NSImage(data: imageData) != nil else { return false }
+        var trace = trace ?? beginScreenshotTrace(origin: source)
+        guard NSImage(data: imageData) != nil else {
+            finishScreenshotTrace(trace, outcome: "Image data was unreadable")
+            return false
+        }
+        markScreenshotTrace(&trace, "Validated image payload")
 
         let payload = ClipboardPayload(
             imageData: imageData,
@@ -1015,20 +1092,26 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             senderName: localDeviceName,
             date: Date()
         )
+        markScreenshotTrace(&trace, "Inserted into history")
         writePayloadToPasteboard(payload)
+        markScreenshotTrace(&trace, "Wrote to clipboard")
 
         if !imageSyncEnabled {
+            finishScreenshotTrace(trace, outcome: "Done locally with image sync paused")
             statusText = imagePausedStatus
             return true
         }
 
         guard syncEnabled else {
+            finishScreenshotTrace(trace, outcome: "Done locally with sync off")
             statusText = syncOffStatus
             return true
         }
 
         statusText = "Screenshot captured."
+        markScreenshotTrace(&trace, "Queued sync")
         schedulePayloadSend(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
+        finishScreenshotTrace(trace, outcome: "Ready for sync")
         return true
     }
 
@@ -1042,6 +1125,48 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             guard let self else { return }
             self.sendPayload(payload, toDeviceIDs: targetDeviceIDs, historyItemID: historyItemID)
         }
+    }
+
+    private func beginScreenshotTrace(origin: String, startedAt: Date = Date()) -> ScreenshotTrace {
+        let trace = ScreenshotTrace(origin: origin, startedAt: startedAt, lastMarkAt: startedAt)
+        appendScreenshotDebugEvent("\(origin) started", at: startedAt)
+        screenshotDebugSummary = "\(origin) started"
+        return trace
+    }
+
+    private func markScreenshotTrace(_ trace: inout ScreenshotTrace, _ stage: String, at timestamp: Date = Date()) {
+        let step = timestamp.timeIntervalSince(trace.lastMarkAt)
+        let total = timestamp.timeIntervalSince(trace.startedAt)
+        appendScreenshotDebugEvent(
+            "\(trace.origin) • \(stage) • +\(Self.screenshotDebugDurationLabel(step)) / \(Self.screenshotDebugDurationLabel(total))",
+            at: timestamp
+        )
+        trace.lastMarkAt = timestamp
+    }
+
+    private func finishScreenshotTrace(_ trace: ScreenshotTrace, outcome: String, at timestamp: Date = Date()) {
+        let total = timestamp.timeIntervalSince(trace.startedAt)
+        let summary = "\(trace.origin) • \(outcome) • \(Self.screenshotDebugDurationLabel(total)) total"
+        appendScreenshotDebugEvent(summary, at: timestamp)
+        screenshotDebugSummary = summary
+    }
+
+    private func appendScreenshotDebugEvent(_ message: String, at timestamp: Date = Date()) {
+        screenshotDebugEvents.insert(
+            ScreenshotDebugEvent(timestamp: timestamp, message: message),
+            at: 0
+        )
+
+        if screenshotDebugEvents.count > 16 {
+            screenshotDebugEvents.removeLast(screenshotDebugEvents.count - 16)
+        }
+
+        print("[AirCopy Screenshot] \(message)")
+    }
+
+    private nonisolated static func screenshotDebugDurationLabel(_ interval: TimeInterval) -> String {
+        let milliseconds = Int((interval * 1000).rounded())
+        return "\(milliseconds)ms"
     }
 
     private nonisolated static func screenshotShortcutMode(for type: CGEventType, event: CGEvent) -> ScreenshotShortcutMode? {

@@ -763,6 +763,38 @@ private struct AirCopySettingsView: View {
                         .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Diagnostics")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                        Spacer()
+
+                        settingsActionButton("Copy Diagnostics", systemImage: "doc.on.doc") {
+                            coordinator.copyScreenshotDiagnostics()
+                        }
+                    }
+
+                    Text(coordinator.screenshotDebugSummary)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !coordinator.screenshotDebugEvents.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(coordinator.screenshotDebugEvents) { event in
+                                Text("\(event.timestamp.formatted(date: .omitted, time: .standard))  \(event.message)")
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(10)
+                        .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
             }
 
         case .screenshots:
