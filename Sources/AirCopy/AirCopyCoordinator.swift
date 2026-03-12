@@ -1003,13 +1003,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fileDescriptor,
             eventMask: [.write, .rename, .delete, .extend, .attrib],
-            queue: DispatchQueue.global(qos: .utility)
+            queue: DispatchQueue.main
         )
 
         source.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.scheduleScreenshotFolderPoll()
-            }
+            self?.scheduleScreenshotFolderPoll()
         }
 
         source.setCancelHandler { [fileDescriptor] in
