@@ -761,7 +761,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func revealCurrentAppInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+        let targetURL = Self.canonicalInstalledAppURL()
+        let resolvedURL = FileManager.default.fileExists(atPath: targetURL.path) ? targetURL : Bundle.main.bundleURL
+        NSWorkspace.shared.activateFileViewerSelecting([resolvedURL])
         statusText = "Revealed AirCopy.app in Finder."
     }
 
@@ -2221,6 +2223,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         ]
 
         return markers.contains { normalized.contains($0) }
+    }
+
+    private nonisolated static func canonicalInstalledAppURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications", isDirectory: true)
+            .appendingPathComponent("AirCopy.app", isDirectory: true)
     }
 
     private func shouldSuppressSync(for payload: ClipboardPayload) -> Bool {

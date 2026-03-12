@@ -7,6 +7,8 @@ BUILD_DIR="$ROOT_DIR/.build"
 DIST_DIR="$ROOT_DIR/dist"
 APP_NAME="AirCopy"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
+INSTALL_BASE_DIR="${AIRCOPY_INSTALL_DIR:-$HOME/Applications}"
+INSTALLED_APP_DIR="$INSTALL_BASE_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -19,6 +21,7 @@ WEBSITE_DOWNLOADS_DIR="$ROOT_DIR/website/downloads"
 
 mkdir -p "$MODULE_CACHE"
 mkdir -p "$DIST_DIR"
+mkdir -p "$INSTALL_BASE_DIR"
 
 build_icon() {
   if ! command -v iconutil >/dev/null 2>&1; then
@@ -77,6 +80,10 @@ if command -v codesign >/dev/null 2>&1; then
   codesign --force --deep --sign - "$APP_DIR"
 fi
 
+echo "Installing canonical app bundle..."
+rm -rf "$INSTALLED_APP_DIR"
+ditto "$APP_DIR" "$INSTALLED_APP_DIR"
+
 ZIP_PATH="$DIST_DIR/$APP_NAME-macOS.zip"
 rm -f "$ZIP_PATH"
 echo "Creating zip archive..."
@@ -90,5 +97,7 @@ cp "$ZIP_PATH" "$WEBSITE_DOWNLOADS_DIR/$APP_NAME-macOS.zip"
 echo
 echo "Created:"
 echo "  $APP_DIR"
+echo "Installed:"
+echo "  $INSTALLED_APP_DIR"
 echo "  $ZIP_PATH"
 echo "  $WEBSITE_DOWNLOADS_DIR/$APP_NAME-macOS.zip"
