@@ -1023,8 +1023,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private func scheduleScreenshotFolderPoll() {
         screenshotImportTask?.cancel()
         screenshotImportTask = Task { [weak self] in
-            for _ in 0..<8 {
-                try? await Task.sleep(for: .milliseconds(110))
+            await MainActor.run {
+                self?.pollScreenshotFolder()
+            }
+
+            for _ in 0..<6 {
+                try? await Task.sleep(for: .milliseconds(45))
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self?.pollScreenshotFolder()
