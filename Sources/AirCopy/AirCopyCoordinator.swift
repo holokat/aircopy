@@ -763,17 +763,19 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     func revealCurrentAppInFinder() {
         let targetURL = Self.canonicalInstalledAppURL()
         let resolvedURL = FileManager.default.fileExists(atPath: targetURL.path) ? targetURL : Bundle.main.bundleURL
-        NSWorkspace.shared.activateFileViewerSelecting([resolvedURL])
+        _ = NSWorkspace.shared.selectFile(resolvedURL.path, inFileViewerRootedAtPath: "")
         statusText = "Revealed AirCopy.app in Finder."
     }
 
     func refreshPermissionStates() {
-        restartScreenshotShortcutCaptureIfNeeded(promptForPermission: false)
+        refreshScreenshotShortcutPermission(prompt: false)
         refreshScreenshotScreenRecordingPermission()
+        attachScreenshotShortcutCaptureIfNeeded()
     }
 
     func requestAccessibilityPermission() {
-        restartScreenshotShortcutCaptureIfNeeded(promptForPermission: true)
+        refreshScreenshotShortcutPermission(prompt: true)
+        attachScreenshotShortcutCaptureIfNeeded()
 
         if screenshotShortcutCapturePermissionGranted {
             statusText = "Accessibility permission granted."
@@ -879,11 +881,18 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private func restartScreenshotShortcutCaptureIfNeeded(promptForPermission: Bool = false) {
         stopScreenshotShortcutCapture()
+        attachScreenshotShortcutCaptureIfNeeded(promptForPermission: promptForPermission)
+    }
+
+    private func attachScreenshotShortcutCaptureIfNeeded(promptForPermission: Bool = false) {
         refreshScreenshotShortcutPermission(prompt: promptForPermission)
 
         guard captureStandardScreenshotShortcutsEnabled else { return }
         guard screenshotShortcutCapturePermissionGranted else {
             statusText = "Allow Accessibility access so AirCopy can handle Cmd-Shift-3 and Cmd-Shift-4."
+            return
+        }
+        guard !screenshotShortcutCaptureActive, screenshotShortcutEventTap == nil, screenshotShortcutRunLoopSource == nil else {
             return
         }
 
