@@ -566,6 +566,9 @@ private struct AirCopySettingsView: View {
                 selectedSection = .permissions
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            coordinator.refreshPermissionStates()
+        }
     }
 
     private var settingsSidebar: some View {
@@ -714,7 +717,7 @@ private struct AirCopySettingsView: View {
 
                 SettingsPermissionCard(
                     title: "Screen Recording",
-                    subtitle: "Lets AirCopy capture screenshots directly instead of waiting for imported files.",
+                    subtitle: "On current macOS this appears under Screen & System Audio Recording, but AirCopy only needs screen capture.",
                     granted: coordinator.screenshotScreenRecordingPermissionGranted,
                     grantedLabel: "Granted",
                     missingLabel: "Needed",
@@ -727,6 +730,19 @@ private struct AirCopySettingsView: View {
                         coordinator.openScreenRecordingPrivacySettings()
                     } else {
                         coordinator.requestScreenRecordingPermission()
+                    }
+                }
+
+                if coordinator.hasPendingSetupPermissions {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("If AirCopy does not appear in the macOS list yet, reveal this app and add it manually with the + button.")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        settingsActionButton("Reveal AirCopy.app", systemImage: "folder") {
+                            coordinator.revealCurrentAppInFinder()
+                        }
                     }
                 }
 
@@ -774,7 +790,7 @@ private struct AirCopySettingsView: View {
             settingsGroup(title: "Standard Screenshots", subtitle: "Make normal macOS screenshot shortcuts behave like live AirCopy items.") {
                 settingsRow(title: "Shortcut Status", value: coordinator.screenshotShortcutCaptureStatusText)
                 settingsRow(
-                    title: "Screen Recording",
+                    title: "Screen & Audio",
                     value: coordinator.screenshotScreenRecordingPermissionGranted ? "Allowed" : "Needed"
                 )
 

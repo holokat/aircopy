@@ -760,6 +760,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func revealCurrentAppInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+        statusText = "Revealed AirCopy.app in Finder."
+    }
+
     func refreshPermissionStates() {
         restartScreenshotShortcutCaptureIfNeeded(promptForPermission: false)
         refreshScreenshotScreenRecordingPermission()
@@ -803,6 +808,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         ]
         .joined(separator: "\n")
 
+        let payload = ClipboardPayload(text: report, sourceAppBundleID: Bundle.main.bundleIdentifier, sourceAppName: "AirCopy")
+        lastKnownPayload = payload
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(report, forType: .string)
         statusText = "Copied screenshot diagnostics."
