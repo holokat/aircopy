@@ -1,6 +1,7 @@
 import AppKit
 @preconcurrency import ApplicationServices
 import Carbon.HIToolbox
+import Darwin
 import Foundation
 import ImageIO
 import MultipeerConnectivity
@@ -193,6 +194,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var syncExpirationTask: Task<Void, Never>?
     private var screenshotPreviewTask: Task<Void, Never>?
     private var screenshotImportTask: Task<Void, Never>?
+    private var screenshotImportSource: DispatchSourceFileSystemObject?
+    private var screenshotImportFileDescriptor: CInt = -1
     private var thumbnailTasksByFingerprint: [String: Task<Void, Never>] = [:]
     nonisolated(unsafe) private var screenshotShortcutEventTap: CFMachPort?
     nonisolated(unsafe) private var screenshotShortcutRunLoopSource: CFRunLoopSource?
@@ -312,6 +315,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         syncExpirationTask?.cancel()
         screenshotPreviewTask?.cancel()
         screenshotImportTask?.cancel()
+        screenshotImportSource?.cancel()
         thumbnailTasksByFingerprint.values.forEach { $0.cancel() }
         if let source = screenshotShortcutRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
@@ -969,18 +973,61 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func restartScreenshotImportMonitorIfNeeded() {
-        screenshotImportTask?.cancel()
-        screenshotImportTask = nil
+        stopScreenshotImportMonitor()
         screenshotMonitorFolderPath = nil
         knownScreenshotFileSignatures.removeAll()
 
         guard importSystemScreenshotsEnabled else { return }
 
         seedKnownScreenshotFiles()
+        attachScreenshotImportWatcher()
+    }
 
+    private func stopScreenshotImportMonitor() {
+        screenshotImportTask?.cancel()
+        screenshotImportTask = nil
+        screenshotImportSource?.cancel()
+        screenshotImportSource = nil
+        screenshotImportFileDescriptor = -1
+    }
+
+    private func attachScreenshotImportWatcher() {
+        let folderURL = systemScreenshotFolderURL
+        let fileDescriptor = open(folderURL.path, O_EVTONLY)
+
+        guard fileDescriptor >= 0 else {
+            statusText = "Unable to watch \(screenshotImportFolderDisplayPath)."
+            return
+        }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .rename, .delete, .extend, .attrib],
+            queue: DispatchQueue.global(qos: .utility)
+        )
+
+        source.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.scheduleScreenshotFolderPoll()
+            }
+        }
+
+        source.setCancelHandler { [fileDescriptor] in
+            close(fileDescriptor)
+        }
+
+        screenshotImportFileDescriptor = fileDescriptor
+        screenshotImportSource = source
+        source.resume()
+        scheduleScreenshotFolderPoll()
+    }
+
+    private func scheduleScreenshotFolderPoll() {
+        screenshotImportTask?.cancel()
         screenshotImportTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(850))
+            for _ in 0..<8 {
+                try? await Task.sleep(for: .milliseconds(110))
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self?.pollScreenshotFolder()
                 }
@@ -1003,13 +1050,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let folderURL = systemScreenshotFolderURL
 
         if screenshotMonitorFolderPath != folderURL.path {
-            screenshotMonitorFolderPath = folderURL.path
-            guard let candidates = screenshotCandidateFiles(in: folderURL) else {
-                statusText = "Allow access to \(screenshotImportFolderDisplayPath) so AirCopy can import standard screenshots."
-                return
-            }
-
-            knownScreenshotFileSignatures = Set(candidates.map(fileSignature(for:)))
+            restartScreenshotImportMonitorIfNeeded()
             return
         }
 
@@ -1036,14 +1077,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @discardableResult
     private func importScreenshotFile(at fileURL: URL) -> Bool {
         let fileTimestamp = screenshotTimestamp(for: fileURL)
+        let age = Date().timeIntervalSince(fileTimestamp)
+        guard age >= 0.08 else { return false }
+
         var trace = beginScreenshotTrace(
             origin: "Fallback screenshot import",
             startedAt: fileTimestamp
         )
         markScreenshotTrace(&trace, "Detected \(fileURL.lastPathComponent)")
-
-        let age = Date().timeIntervalSince(fileTimestamp)
-        guard age >= 0.35 else { return false }
         markScreenshotTrace(&trace, "File age at import \(Self.screenshotDebugDurationLabel(age))")
         guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else {
             finishScreenshotTrace(trace, outcome: "Failed to read screenshot file")
