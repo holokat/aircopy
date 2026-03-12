@@ -407,6 +407,30 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         (systemScreenshotFolderURL.path as NSString).abbreviatingWithTildeInPath
     }
 
+    var missingPermissionCount: Int {
+        [
+            screenshotShortcutCapturePermissionGranted,
+            screenshotScreenRecordingPermissionGranted
+        ]
+        .filter { !$0 }
+        .count
+    }
+
+    var hasPendingSetupPermissions: Bool {
+        missingPermissionCount > 0
+    }
+
+    var permissionsStatusSummary: String {
+        switch missingPermissionCount {
+        case 0:
+            return "All required screenshot permissions are granted."
+        case 1:
+            return "1 permission still needs attention."
+        default:
+            return "\(missingPermissionCount) permissions still need attention."
+        }
+    }
+
     var screenshotShortcutCaptureStatusText: String {
         if !captureStandardScreenshotShortcutsEnabled {
             return "Off"
@@ -734,6 +758,33 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         NSWorkspace.shared.open(url)
+    }
+
+    func refreshPermissionStates() {
+        restartScreenshotShortcutCaptureIfNeeded(promptForPermission: false)
+        refreshScreenshotScreenRecordingPermission()
+    }
+
+    func requestAccessibilityPermission() {
+        restartScreenshotShortcutCaptureIfNeeded(promptForPermission: true)
+
+        if screenshotShortcutCapturePermissionGranted {
+            statusText = "Accessibility permission granted."
+        } else {
+            statusText = "Enable Accessibility for AirCopy."
+            openAccessibilityPrivacySettings()
+        }
+    }
+
+    func requestScreenRecordingPermission() {
+        screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.requestPermission()
+
+        if screenshotScreenRecordingPermissionGranted {
+            statusText = "Screen Recording permission granted."
+        } else {
+            statusText = "Enable Screen Recording for AirCopy."
+            openScreenRecordingPrivacySettings()
+        }
     }
 
     func copyScreenshotDiagnostics() {

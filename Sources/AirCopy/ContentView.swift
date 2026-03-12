@@ -429,6 +429,7 @@ private struct MainPeerCard: View {
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case general
+    case permissions
     case sync
     case screenshots
     case privacy
@@ -441,6 +442,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "General"
+        case .permissions:
+            return "Permissions"
         case .sync:
             return "Sync"
         case .screenshots:
@@ -458,6 +461,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "gearshape"
+        case .permissions:
+            return "checkmark.shield"
         case .sync:
             return "arrow.triangle.2.circlepath"
         case .screenshots:
@@ -475,6 +480,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "Basic app preferences and appearance."
+        case .permissions:
+            return "Grant macOS access AirCopy still needs."
         case .sync:
             return "How AirCopy behaves while syncing."
         case .screenshots:
@@ -552,6 +559,13 @@ private struct AirCopySettingsView: View {
             .background(AirCopyTheme.background(for: colorScheme))
         }
         .frame(minWidth: 960, minHeight: 640)
+        .onAppear {
+            coordinator.refreshPermissionStates()
+
+            if coordinator.hasPendingSetupPermissions && selectedSection == .general {
+                selectedSection = .permissions
+            }
+        }
     }
 
     private var settingsSidebar: some View {
@@ -577,6 +591,13 @@ private struct AirCopySettingsView: View {
                                     ? Color.white
                                     : AirCopyTheme.primaryText(for: colorScheme)
                             )
+
+                        if section == .permissions && coordinator.hasPendingSetupPermissions {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 7, height: 7)
+                        }
+
                         Spacer()
                     }
                     .padding(.horizontal, 12)
@@ -657,6 +678,62 @@ private struct AirCopySettingsView: View {
                 settingsRow(title: "Trusted Macs", value: "\(coordinator.peerDevices.filter { $0.trustState == .trusted }.count)")
             }
 
+        case .permissions:
+            settingsGroup(title: "Required Access", subtitle: "AirCopy only needs these for instant screenshot capture.") {
+                HStack(alignment: .center, spacing: 10) {
+                    Circle()
+                        .fill(coordinator.hasPendingSetupPermissions ? Color.red : AirCopyTheme.success(for: colorScheme))
+                        .frame(width: 8, height: 8)
+
+                    Text(coordinator.permissionsStatusSummary)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    Spacer()
+
+                    settingsActionButton("Refresh", systemImage: "arrow.clockwise") {
+                        coordinator.refreshPermissionStates()
+                    }
+                }
+
+                SettingsPermissionCard(
+                    title: "Accessibility",
+                    subtitle: "Lets AirCopy intercept Cmd-Shift-3 and Cmd-Shift-4 before macOS saves a screenshot file.",
+                    granted: coordinator.screenshotShortcutCapturePermissionGranted,
+                    grantedLabel: "Granted",
+                    missingLabel: "Needed",
+                    actionTitle: coordinator.screenshotShortcutCapturePermissionGranted ? "Open Settings" : "Enable",
+                    actionSystemImage: coordinator.screenshotShortcutCapturePermissionGranted ? "arrow.up.right.square" : "hand.raised"
+                ) {
+                    if coordinator.screenshotShortcutCapturePermissionGranted {
+                        coordinator.openAccessibilityPrivacySettings()
+                    } else {
+                        coordinator.requestAccessibilityPermission()
+                    }
+                }
+
+                SettingsPermissionCard(
+                    title: "Screen Recording",
+                    subtitle: "Lets AirCopy capture screenshots directly instead of waiting for imported files.",
+                    granted: coordinator.screenshotScreenRecordingPermissionGranted,
+                    grantedLabel: "Granted",
+                    missingLabel: "Needed",
+                    actionTitle: coordinator.screenshotScreenRecordingPermissionGranted ? "Open Settings" : "Enable",
+                    actionSystemImage: coordinator.screenshotScreenRecordingPermissionGranted
+                        ? "arrow.up.right.square"
+                        : "rectangle.inset.filled.and.person.filled"
+                ) {
+                    if coordinator.screenshotScreenRecordingPermissionGranted {
+                        coordinator.openScreenRecordingPrivacySettings()
+                    } else {
+                        coordinator.requestScreenRecordingPermission()
+                    }
+                }
+
+                Toggle("AirCopy handles Cmd-Shift-3 and Cmd-Shift-4", isOn: $coordinator.captureStandardScreenshotShortcutsEnabled)
+                    .tint(AirCopyTheme.syncTint(for: colorScheme))
+            }
+
         case .sync:
             settingsGroup(title: "Sync Behavior", subtitle: "Primary sync decisions belong here, not in the main workspace.") {
                 Toggle(
@@ -695,40 +772,11 @@ private struct AirCopySettingsView: View {
             }
 
             settingsGroup(title: "Standard Screenshots", subtitle: "Make normal macOS screenshot shortcuts behave like live AirCopy items.") {
-                Toggle("AirCopy handles Cmd-Shift-3 and Cmd-Shift-4", isOn: $coordinator.captureStandardScreenshotShortcutsEnabled)
-                    .tint(AirCopyTheme.syncTint(for: colorScheme))
-
                 settingsRow(title: "Shortcut Status", value: coordinator.screenshotShortcutCaptureStatusText)
                 settingsRow(
                     title: "Screen Recording",
                     value: coordinator.screenshotScreenRecordingPermissionGranted ? "Allowed" : "Needed"
                 )
-
-                if coordinator.captureStandardScreenshotShortcutsEnabled && !coordinator.screenshotShortcutCapturePermissionGranted {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("AirCopy needs Accessibility permission to intercept the standard screenshot keys before macOS handles them.")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        settingsActionButton("Open Accessibility Settings", systemImage: "hand.raised") {
-                            coordinator.openAccessibilityPrivacySettings()
-                        }
-                    }
-                }
-
-                if !coordinator.screenshotScreenRecordingPermissionGranted {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("AirCopy also needs Screen Recording permission to capture pixels directly instead of waiting for the system screenshot file path.")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        settingsActionButton("Open Screen Recording Settings", systemImage: "rectangle.inset.filled.and.person.filled") {
-                            coordinator.openScreenRecordingPrivacySettings()
-                        }
-                    }
-                }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Capture Now")
@@ -747,6 +795,12 @@ private struct AirCopySettingsView: View {
                 }
 
                 Toggle("Import saved macOS screenshots as a fallback", isOn: $coordinator.importSystemScreenshotsEnabled)
+
+                if coordinator.hasPendingSetupPermissions {
+                    Text("Direct screenshot permissions live in Settings > Permissions.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Watched Folder")
@@ -1247,6 +1301,64 @@ private struct ScreenshotStyleSliderRow: View {
             Slider(value: $value, in: range)
                 .tint(AirCopyTheme.highlight(for: colorScheme))
         }
+    }
+}
+
+private struct SettingsPermissionCard: View {
+    let title: String
+    let subtitle: String
+    let granted: Bool
+    let grantedLabel: String
+    let missingLabel: String
+    let actionTitle: String
+    let actionSystemImage: String
+    let action: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Circle()
+                .fill(granted ? AirCopyTheme.success(for: colorScheme) : Color.red)
+                .frame(width: 10, height: 10)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+
+                    Text(granted ? grantedLabel : missingLabel)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(granted ? AirCopyTheme.success(for: colorScheme) : Color.red)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            (granted ? AirCopyTheme.success(for: colorScheme) : Color.red).opacity(0.12),
+                            in: Capsule()
+                        )
+                }
+
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AirCopyTheme.secondaryText(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            Button(action: action) {
+                Label(actionTitle, systemImage: actionSystemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AirCopyTheme.primaryText(for: colorScheme))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(colorScheme == .light ? 0.9 : 0.06), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(AirCopyTheme.insetFill(for: colorScheme), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
