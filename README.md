@@ -11,3 +11,7 @@ AirCopy lets you copy on one Mac and paste on another.
 5. Copy on one Mac and paste on another.
 
 AirCopy syncs text, images, and recent clipboard history between nearby Macs you control.
+
+## License
+
+MIT
