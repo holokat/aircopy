@@ -158,6 +158,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private let maxHistoryItems = 64
     private let maxInlineAttachmentBytes: Int64 = 8 * 1024 * 1024
     private let inviteRetryInterval: TimeInterval = 3
+    private let lostPeerGraceInterval: TimeInterval = 5
+    private let connectivityHeartbeatInterval: Duration = .seconds(12)
+    private let connectivityWatchdogInterval: Duration = .seconds(6)
+    private let stalledConnectivityResetInterval: TimeInterval = 12
+    private let minimumConnectivityResetSpacing: TimeInterval = 10
     private let nativeScreenshotCapture = NativeScreenshotCaptureController()
     private let protectedPasswordManagerBundleIDs: Set<String> = [
         "com.1password.1password",
@@ -191,6 +196,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var outboundMessageHistoryMap: [UUID: UUID] = [:]
     private var clipboardTask: Task<Void, Never>?
     private var appearanceTask: Task<Void, Never>?
+    private var connectivityHeartbeatTask: Task<Void, Never>?
+    private var connectivityWatchdogTask: Task<Void, Never>?
+    private var lostPeerTasksByDeviceID: [String: Task<Void, Never>] = [:]
     private var syncExpirationTask: Task<Void, Never>?
     private var screenshotPreviewTask: Task<Void, Never>?
     private var screenshotImportTask: Task<Void, Never>?
@@ -205,6 +213,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var pendingRemotePayload: ClipboardPayload?
     private var knownScreenshotFileSignatures = Set<String>()
     private var screenshotMonitorFolderPath: String?
+    private var lastConnectivityEventAt = Date()
+    private var lastConnectivityResetAt: Date?
 
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
@@ -303,6 +313,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         startServices()
         startClipboardMonitor()
         startAppearanceMonitor()
+        startConnectivityHeartbeat()
+        startConnectivityWatchdog()
+        registerConnectivityObservers()
         scheduleSyncExpirationTask()
         restartScreenshotImportMonitorIfNeeded()
         restartScreenshotShortcutCaptureIfNeeded()
@@ -312,11 +325,16 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     deinit {
         clipboardTask?.cancel()
         appearanceTask?.cancel()
+        connectivityHeartbeatTask?.cancel()
+        connectivityWatchdogTask?.cancel()
+        lostPeerTasksByDeviceID.values.forEach { $0.cancel() }
         syncExpirationTask?.cancel()
         screenshotPreviewTask?.cancel()
         screenshotImportTask?.cancel()
         screenshotImportSource?.cancel()
         thumbnailTasksByFingerprint.values.forEach { $0.cancel() }
+        clearCopiedStateTask?.cancel()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let source = screenshotShortcutRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             screenshotShortcutRunLoopSource = nil
@@ -326,8 +344,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             CFMachPortInvalidate(tap)
             screenshotShortcutEventTap = nil
         }
-
-        clearCopiedStateTask?.cancel()
     }
 
     var discoveredPeerCount: Int {
@@ -879,6 +895,195 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
+    private func startConnectivityHeartbeat() {
+        connectivityHeartbeatTask?.cancel()
+        let interval = connectivityHeartbeatInterval
+        connectivityHeartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                await MainActor.run {
+                    self?.sendPresenceHeartbeatIfNeeded()
+                }
+            }
+        }
+    }
+
+    private func startConnectivityWatchdog() {
+        connectivityWatchdogTask?.cancel()
+        let interval = connectivityWatchdogInterval
+        connectivityWatchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                await MainActor.run {
+                    self?.performConnectivityWatchdogCheck()
+                }
+            }
+        }
+    }
+
+    private func registerConnectivityObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(self, selector: #selector(workspaceDidWake), name: NSWorkspace.didWakeNotification, object: nil)
+        center.addObserver(self, selector: #selector(workspaceScreensDidWake), name: NSWorkspace.screensDidWakeNotification, object: nil)
+    }
+
+    private func handleWorkspaceConnectivityRefresh(reason: String) {
+        noteConnectivityEvent()
+
+        if connectedPeerCount > 0 {
+            restartDiscoveryServices()
+            statusText = reason
+            return
+        }
+
+        scheduleConnectivityRecovery(reason: reason, delay: .milliseconds(350), allowSessionRebuild: true)
+    }
+
+    @objc private func workspaceDidWake(_ notification: Notification) {
+        handleWorkspaceConnectivityRefresh(reason: "Mac woke up. Refreshing nearby Macs...")
+    }
+
+    @objc private func workspaceScreensDidWake(_ notification: Notification) {
+        handleWorkspaceConnectivityRefresh(reason: "Display woke up. Refreshing nearby Macs...")
+    }
+
+    private func noteConnectivityEvent(at date: Date = Date()) {
+        lastConnectivityEventAt = date
+    }
+
+    private func cancelLostPeerGrace(for deviceID: String) {
+        lostPeerTasksByDeviceID.removeValue(forKey: deviceID)?.cancel()
+    }
+
+    private func scheduleLostPeerGrace(for deviceID: String, peerName: String) {
+        cancelLostPeerGrace(for: deviceID)
+        let graceInterval = lostPeerGraceInterval
+
+        lostPeerTasksByDeviceID[deviceID] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(graceInterval))
+
+            await MainActor.run {
+                guard let self else { return }
+                defer { self.lostPeerTasksByDeviceID[deviceID] = nil }
+
+                guard !self.connectedDeviceIDs.contains(deviceID) else { return }
+                guard self.peerStateByID[deviceID]?.isDiscovered == true else { return }
+
+                self.updatePeer(deviceID: deviceID) { peer in
+                    peer.isDiscovered = false
+                }
+                self.refreshPeerDevices()
+
+                if self.trustState(for: deviceID) == .trusted {
+                    self.scheduleConnectivityRecovery(
+                        reason: "Lost sight of \(peerName). Refreshing nearby Macs...",
+                        delay: .milliseconds(450),
+                        allowSessionRebuild: true
+                    )
+                }
+            }
+        }
+    }
+
+    private func restartDiscoveryServices() {
+        advertiser?.stopAdvertisingPeer()
+        browser?.stopBrowsingForPeers()
+        advertiser = nil
+        browser = nil
+        startServices()
+    }
+
+    private func rebuildSessionAndRestartServices(reason: String) {
+        let now = Date()
+        if let lastConnectivityResetAt,
+           now.timeIntervalSince(lastConnectivityResetAt) < minimumConnectivityResetSpacing {
+            return
+        }
+
+        lastConnectivityResetAt = now
+
+        advertiser?.stopAdvertisingPeer()
+        browser?.stopBrowsingForPeers()
+        advertiser = nil
+        browser = nil
+
+        let oldSession = session
+        oldSession?.delegate = nil
+        oldSession?.disconnect()
+
+        let newSession = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
+        newSession.delegate = self
+        session = newSession
+
+        for id in peerStateByID.keys {
+            peerStateByID[id]?.isConnected = false
+        }
+
+        refreshPeerDevices()
+        startServices()
+        statusText = reason
+    }
+
+    private func scheduleConnectivityRecovery(
+        reason: String,
+        delay: Duration = .seconds(1),
+        allowSessionRebuild: Bool
+    ) {
+        Task { [weak self] in
+            try? await Task.sleep(for: delay)
+
+            await MainActor.run {
+                self?.recoverConnectivityIfNeeded(reason: reason, allowSessionRebuild: allowSessionRebuild)
+            }
+        }
+    }
+
+    private func recoverConnectivityIfNeeded(reason: String, allowSessionRebuild: Bool) {
+        guard syncEnabled else { return }
+
+        let reconnectableTrustedPeers = peerDevices.filter {
+            $0.trustState == .trusted && ($0.isDiscovered || peerIDByDeviceID[$0.id] != nil)
+        }
+
+        guard !reconnectableTrustedPeers.isEmpty else { return }
+
+        if advertiser == nil || browser == nil {
+            restartDiscoveryServices()
+        }
+
+        for peer in reconnectableTrustedPeers where !peer.isConnected && peer.isDiscovered {
+            inviteIfPossible(deviceID: peer.id)
+        }
+
+        guard allowSessionRebuild, connectedPeerCount == 0 else {
+            statusText = reason
+            return
+        }
+
+        let stalledFor = Date().timeIntervalSince(lastConnectivityEventAt)
+        guard stalledFor >= stalledConnectivityResetInterval else {
+            statusText = reason
+            return
+        }
+
+        rebuildSessionAndRestartServices(reason: reason)
+    }
+
+    private func performConnectivityWatchdogCheck() {
+        guard syncEnabled else { return }
+
+        let trustedPeersNeedingAttention = peerDevices.filter {
+            $0.trustState == .trusted && !$0.isConnected && ($0.isDiscovered || peerIDByDeviceID[$0.id] != nil)
+        }
+
+        guard !trustedPeersNeedingAttention.isEmpty else { return }
+
+        recoverConnectivityIfNeeded(
+            reason: "Refreshing the nearby Mac connection...",
+            allowSessionRebuild: true
+        )
+    }
+
     private func restartScreenshotShortcutCaptureIfNeeded(promptForPermission: Bool = false) {
         stopScreenshotShortcutCapture()
         attachScreenshotShortcutCaptureIfNeeded(promptForPermission: promptForPermission)
@@ -1416,6 +1621,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         rememberMessageID(message.id)
         outboundMessageHistoryMap[message.id] = historyItemID
+        noteConnectivityEvent(at: message.sentAt)
 
         let data: Data
         do {
@@ -1491,6 +1697,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             }
         }
 
+        noteConnectivityEvent()
+
         sendReceipt(.clipboardUpdated, for: message, to: peer)
         switch saveReceivedPayloadToDiskIfNeeded(message.payload, date: message.sentAt) {
         case .saved(let summary):
@@ -1526,6 +1734,26 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             : "Delivered to \(receipt.recipientName)."
     }
 
+    private func handlePresence(_ presence: PeerPresence, from peer: MCPeerID) {
+        let receivedAt = Date()
+        let resolvedID = upsertPeer(
+            displayName: peer.displayName,
+            deviceID: presence.senderID,
+            discovered: true,
+            connected: session.connectedPeers.contains(peer)
+        )
+        peerIDByDeviceID[resolvedID] = peer
+        cancelLostPeerGrace(for: resolvedID)
+        noteConnectivityEvent(at: receivedAt)
+
+        updatePeer(deviceID: resolvedID) { peerState in
+            peerState.lastSeenAt = receivedAt
+            peerState.lastReceiptText = "Nearby"
+        }
+
+        refreshPeerDevices()
+    }
+
     private func sendReceipt(_ kind: ClipboardReceiptKind, for message: ClipboardMessage, to peer: MCPeerID) {
         let receipt = ClipboardReceipt(
             messageID: message.id,
@@ -1541,6 +1769,48 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         } catch {
             statusText = "Failed to send receipt to \(message.senderName)."
         }
+    }
+
+    private func sendPresenceHeartbeatIfNeeded() {
+        let targets = trustedConnectedPeers.compactMap { peerState -> (String, String, MCPeerID)? in
+            guard let peer = peerIDByDeviceID[peerState.id] else { return nil }
+            return (peerState.id, peerState.displayName, peer)
+        }
+
+        guard !targets.isEmpty else { return }
+
+        let presence = PeerPresence(senderID: deviceID, senderName: localDeviceName, sentAt: Date())
+        noteConnectivityEvent(at: presence.sentAt)
+
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(AirCopyWireMessage.presence(presence))
+        } catch {
+            return
+        }
+
+        for (deviceID, displayName, peer) in targets {
+            do {
+                try session.send(data, toPeers: [peer], with: .unreliable)
+                updatePeer(deviceID: deviceID) { peerState in
+                    peerState.lastSeenAt = presence.sentAt
+                }
+            } catch {
+                updatePeer(deviceID: deviceID) { peerState in
+                    peerState.isConnected = false
+                    peerState.lastReceiptState = .failed
+                    peerState.lastReceiptText = "Connection dropped"
+                }
+
+                scheduleConnectivityRecovery(
+                    reason: "Refreshing connection to \(displayName)...",
+                    delay: .milliseconds(300),
+                    allowSessionRebuild: true
+                )
+            }
+        }
+
+        refreshPeerDevices()
     }
 
     private func writePayloadToPasteboard(_ payload: ClipboardPayload) {
@@ -2677,6 +2947,7 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard peerName != self.peerID.displayName else { return }
+            self.noteConnectivityEvent()
 
             let resolvedID = self.upsertPeer(
                 displayName: peerName,
@@ -2685,6 +2956,7 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
                 connected: false
             )
             self.peerIDByDeviceID[resolvedID] = peerBox.peerID
+            self.cancelLostPeerGrace(for: resolvedID)
 
             guard self.trustState(for: resolvedID) == .trusted else {
                 self.statusText = "Found \(peerName). Approval needed before connecting."
@@ -2701,12 +2973,13 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            self.noteConnectivityEvent()
 
             let resolvedID = self.peerDisplayNameToDeviceID[peerName] ?? peerName
-            self.updatePeer(deviceID: resolvedID) { peer in
-                peer.isDiscovered = false
+            guard !self.connectedDeviceIDs.contains(resolvedID) else {
+                return
             }
-            self.refreshPeerDevices()
+            self.scheduleLostPeerGrace(for: resolvedID, peerName: peerName)
         }
     }
 
@@ -2723,6 +2996,7 @@ extension AirCopyCoordinator: MCSessionDelegate {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            self.noteConnectivityEvent()
 
             let resolvedID = self.peerDisplayNameToDeviceID[peerName] ?? peerName
             let trustState = self.trustState(for: resolvedID)
@@ -2736,6 +3010,8 @@ extension AirCopyCoordinator: MCSessionDelegate {
 
             switch state {
             case .connected:
+                self.cancelLostPeerGrace(for: resolvedID)
+                self.lastInviteAttemptByDeviceID[resolvedID] = nil
                 self.statusText = "Connected to \(peerName)."
 
                 if trustState == .trusted,
@@ -2745,6 +3021,7 @@ extension AirCopyCoordinator: MCSessionDelegate {
                     self.sendPayload(payload, toDeviceIDs: [resolvedID], historyItemID: self.latestClipboardItem?.id)
                 }
             case .connecting:
+                self.cancelLostPeerGrace(for: resolvedID)
                 self.statusText = "Connecting to \(peerName)..."
             case .notConnected:
                 self.updatePeer(deviceID: resolvedID) { peer in
@@ -2752,10 +3029,16 @@ extension AirCopyCoordinator: MCSessionDelegate {
                 }
                 self.refreshPeerDevices()
 
-                if trustState == .trusted,
-                   self.peerStateByID[resolvedID]?.isDiscovered == true {
+                if trustState == .trusted {
                     self.statusText = "Reconnecting to \(peerName)..."
-                    self.inviteIfPossible(deviceID: resolvedID)
+                    if self.peerStateByID[resolvedID]?.isDiscovered == true {
+                        self.inviteIfPossible(deviceID: resolvedID)
+                    }
+                    self.scheduleConnectivityRecovery(
+                        reason: "Reconnecting to \(peerName)...",
+                        delay: .milliseconds(800),
+                        allowSessionRebuild: true
+                    )
                     return
                 }
 
@@ -2775,6 +3058,7 @@ extension AirCopyCoordinator: MCSessionDelegate {
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.noteConnectivityEvent()
 
                 switch wireMessage.kind {
                 case .clipboard:
@@ -2784,6 +3068,10 @@ extension AirCopyCoordinator: MCSessionDelegate {
                 case .receipt:
                     if let receipt = wireMessage.receipt {
                         self.handleReceipt(receipt)
+                    }
+                case .presence:
+                    if let presence = wireMessage.presence {
+                        self.handlePresence(presence, from: peerBox.peerID)
                     }
                 }
             }
