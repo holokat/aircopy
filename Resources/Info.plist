@@ -34,5 +34,9 @@
 	<string>AirCopy uses your local network to discover nearby Macs and sync copied text between them.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>AirCopy uses nearby device connectivity to discover Macs and sync copied text.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>AirCopy can include your camera when you record your screen.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AirCopy can include your microphone when you record your screen.</string>
 </dict>
 </plist>

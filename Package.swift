@@ -15,6 +15,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AirCopy"
+        ),
+        .testTarget(
+            name: "AirCopyTests",
+            dependencies: ["AirCopy"]
         )
     ]
 )

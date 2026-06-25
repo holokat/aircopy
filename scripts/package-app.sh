@@ -18,6 +18,8 @@ ICONSET_DIR="$DIST_DIR/AirCopy.iconset"
 ICON_FILE="$RESOURCES_DIR/AirCopy.icns"
 WEBSITE_ASSETS_DIR="$ROOT_DIR/website/assets"
 WEBSITE_DOWNLOADS_DIR="$ROOT_DIR/website/downloads"
+SIGN_IDENTITY="${AIRCOPY_CODE_SIGN_IDENTITY:-}"
+KEEP_STAGING_APP="${AIRCOPY_KEEP_STAGING_APP:-0}"
 
 mkdir -p "$MODULE_CACHE"
 mkdir -p "$DIST_DIR"
@@ -53,6 +55,21 @@ build_icon() {
   iconutil -c icns "$ICONSET_DIR" -o "$DIST_DIR/AirCopy.icns"
 }
 
+resolve_sign_identity() {
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    return
+  fi
+
+  if ! command -v security >/dev/null 2>&1; then
+    return
+  fi
+
+  SIGN_IDENTITY="$(
+    security find-identity -p codesigning -v 2>/dev/null \
+      | awk -F '"' '/Apple Development/ { print $2; exit }'
+  )"
+}
+
 echo "Building release binary..."
 env CLANG_MODULE_CACHE_PATH="$MODULE_CACHE" \
   SWIFTPM_MODULECACHE_OVERRIDE="$MODULE_CACHE" \
@@ -76,8 +93,15 @@ if [[ -f "$DIST_DIR/AirCopy.icns" ]]; then
 fi
 
 if command -v codesign >/dev/null 2>&1; then
-  echo "Applying ad-hoc signature..."
-  codesign --force --deep --sign - "$APP_DIR"
+  resolve_sign_identity
+
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    echo "Applying stable developer signature: $SIGN_IDENTITY"
+    codesign --force --deep --options runtime --timestamp=none --sign "$SIGN_IDENTITY" "$APP_DIR"
+  else
+    echo "Falling back to ad-hoc signature..."
+    codesign --force --deep --sign - "$APP_DIR"
+  fi
 fi
 
 echo "Installing canonical app bundle..."
@@ -94,10 +118,14 @@ mkdir -p "$WEBSITE_ASSETS_DIR" "$WEBSITE_DOWNLOADS_DIR"
 cp "$ROOT_DIR/Resources/1024.png" "$WEBSITE_ASSETS_DIR/aircopy-logo.png"
 cp "$ZIP_PATH" "$WEBSITE_DOWNLOADS_DIR/$APP_NAME-macOS.zip"
 
+if [[ "$KEEP_STAGING_APP" != "1" ]]; then
+  echo "Removing staging app bundle from dist..."
+  rm -rf "$APP_DIR"
+fi
+
 echo
 echo "Created:"
-echo "  $APP_DIR"
-echo "Installed:"
-echo "  $INSTALLED_APP_DIR"
 echo "  $ZIP_PATH"
 echo "  $WEBSITE_DOWNLOADS_DIR/$APP_NAME-macOS.zip"
+echo "Installed:"
+echo "  $INSTALLED_APP_DIR"

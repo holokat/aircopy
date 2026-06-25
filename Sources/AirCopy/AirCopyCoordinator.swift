@@ -1,43 +1,23 @@
 import AppKit
-@preconcurrency import ApplicationServices
 import Carbon.HIToolbox
-import Darwin
 import Foundation
-import ImageIO
 import MultipeerConnectivity
 import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
 final class AirCopyCoordinator: NSObject, ObservableObject {
-    private enum ScreenshotShortcutMode {
-        case fullScreen
-        case selection
-    }
-
-    struct ScreenshotDebugEvent: Identifiable, Hashable {
-        let id = UUID()
-        let timestamp: Date
-        let message: String
-    }
-
-    private struct ScreenshotTrace {
-        let origin: String
-        let startedAt: Date
-        var lastMarkAt: Date
-    }
-
-    private enum SaveReceivedPayloadResult {
-        case skipped
-        case saved(String)
-        case failed(String)
-    }
-
     @Published var syncEnabled = true {
         didSet {
             guard syncEnabled != oldValue else { return }
 
             if syncEnabled {
+                guard hasSubscriptionAccess else {
+                    syncEnabled = false
+                    statusText = "Start your AirCopy subscription to sync between Macs."
+                    return
+                }
+
                 startServices()
                 statusText = "Sync to All is on."
             } else {
@@ -51,36 +31,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         didSet {
             UserDefaults.standard.set(imageSyncEnabled, forKey: Self.imageSyncEnabledKey)
             statusText = imageSyncEnabled ? "Image sync enabled." : "Image sync paused."
-        }
-    }
-
-    @Published var screenshotStyleSettings = ScreenshotStyleSettings() {
-        didSet {
-            persistScreenshotStyleSettings()
-            scheduleScreenshotStylePreviewUpdate()
-        }
-    }
-
-    @Published var importSystemScreenshotsEnabled = true {
-        didSet {
-            UserDefaults.standard.set(importSystemScreenshotsEnabled, forKey: Self.importSystemScreenshotsEnabledKey)
-            restartScreenshotImportMonitorIfNeeded()
-            statusText = importSystemScreenshotsEnabled
-                ? "Importing standard macOS screenshots."
-                : "Standard macOS screenshot import is off."
-        }
-    }
-
-    @Published var captureStandardScreenshotShortcutsEnabled = false {
-        didSet {
-            UserDefaults.standard.set(
-                captureStandardScreenshotShortcutsEnabled,
-                forKey: Self.captureStandardScreenshotShortcutsEnabledKey
-            )
-            restartScreenshotShortcutCaptureIfNeeded(promptForPermission: true)
-            statusText = captureStandardScreenshotShortcutsEnabled
-                ? "AirCopy screenshot shortcuts are on."
-                : "AirCopy screenshot shortcuts are off."
         }
     }
 
@@ -114,6 +64,33 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
+    @Published var requireIncomingClipboardApproval = false {
+        didSet {
+            UserDefaults.standard.set(requireIncomingClipboardApproval, forKey: Self.requireIncomingClipboardApprovalKey)
+            statusText = requireIncomingClipboardApproval
+                ? "Incoming team clips will wait in the inbox."
+                : "Incoming clips will update this clipboard automatically."
+        }
+    }
+
+    @Published var applyAppPoliciesToIncomingItems = true {
+        didSet {
+            UserDefaults.standard.set(applyAppPoliciesToIncomingItems, forKey: Self.applyAppPoliciesToIncomingItemsKey)
+            statusText = applyAppPoliciesToIncomingItems
+                ? "Incoming clips will respect excluded-app rules."
+                : "Incoming clips will ignore custom excluded-app rules."
+        }
+    }
+
+    @Published var blockPasswordManagerClips = true {
+        didSet {
+            UserDefaults.standard.set(blockPasswordManagerClips, forKey: Self.blockPasswordManagerClipsKey)
+            statusText = blockPasswordManagerClips
+                ? "Password manager clips are blocked from team sync."
+                : "Password manager clips can sync when sent."
+        }
+    }
+
     @Published var settingsPresented = false
 
     @Published var appearancePreference: AppearancePreference {
@@ -130,11 +107,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var recentlyCopiedHistoryItemID: UUID?
     @Published private(set) var effectiveColorScheme: ColorScheme
     @Published private(set) var appIconImage: NSImage?
-    @Published private(set) var screenshotStylePreviewImage: NSImage?
     @Published private(set) var imageThumbnailByFingerprint: [String: NSImage] = [:]
-    @Published private(set) var screenshotDebugSummary = "No screenshot activity yet."
-    @Published private(set) var screenshotDebugEvents: [ScreenshotDebugEvent] = []
+    @Published private(set) var incomingClipboardItems: [IncomingClipboardItem] = []
+    @Published private(set) var protectedPasswordManagerApplications: [ProtectedAppRule] = AppSourcePrivacyPolicy.protectedPasswordManagerApplications
     @Published private(set) var savedItemsBaseDirectoryPath: String
+    @Published private(set) var hasSubscriptionAccess = false
     @Published private(set) var temporarySyncUntil: Date? {
         didSet {
             if let temporarySyncUntil {
@@ -148,46 +125,44 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
     @Published private(set) var frontmostApplicationName: String
     @Published private(set) var excludedApplications: [AppExclusion] = []
-    @Published private(set) var screenshotShortcutCapturePermissionGranted = false
-    @Published private(set) var screenshotScreenRecordingPermissionGranted = false
-    @Published private(set) var screenshotShortcutCaptureActive = false
 
     private let serviceType = "aircopy"
     private let deviceID: String
     private let peerID: MCPeerID
-    private let maxHistoryItems = 64
+    private static let historyLimitKey = "ac.settings.historyLimit"
+    private static let soundEnabledKey = "ac.settings.soundOnSync"
+    @Published var historyLimit: Int = {
+        let stored = UserDefaults.standard.integer(forKey: AirCopyCoordinator.historyLimitKey)
+        return stored == 0 ? 50 : stored
+    }() {
+        didSet {
+            UserDefaults.standard.set(historyLimit, forKey: Self.historyLimitKey)
+            if historyLimit != oldValue { sortAndTrimHistory() }
+        }
+    }
+    @Published var soundEnabled: Bool = UserDefaults.standard.object(forKey: AirCopyCoordinator.soundEnabledKey) as? Bool ?? false {
+        didSet { UserDefaults.standard.set(soundEnabled, forKey: Self.soundEnabledKey) }
+    }
+    private var maxHistoryItems: Int { historyLimit }
     private let maxInlineAttachmentBytes: Int64 = 8 * 1024 * 1024
     private let inviteRetryInterval: TimeInterval = 3
+    private let pendingConnectionTimeout: TimeInterval = 10
     private let lostPeerGraceInterval: TimeInterval = 5
     private let connectivityHeartbeatInterval: Duration = .seconds(12)
     private let connectivityWatchdogInterval: Duration = .seconds(6)
     private let stalledConnectivityResetInterval: TimeInterval = 12
     private let minimumConnectivityResetSpacing: TimeInterval = 10
-    private let nativeScreenshotCapture = NativeScreenshotCaptureController()
-    private let protectedPasswordManagerBundleIDs: Set<String> = [
-        "com.1password.1password",
-        "com.agilebits.onepassword7",
-        "com.bitwarden.desktop",
-        "com.lastpass.LastPass",
-        "com.roboform.RoboForm",
-        "com.dashlane.dashlanephonefinal",
-        "org.keepassxc.keepassxc"
-    ]
-    private static let imageFileExtensions: Set<String> = [
-        "png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "heif",
-        "tif", "tiff", "bmp", "avif", "jxl", "icns"
-    ]
 
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     private var peerIDByDeviceID: [String: MCPeerID] = [:]
+    private var deviceIDByPeerID: [MCPeerID: String] = [:]
     private var peerDisplayNameToDeviceID: [String: String] = [:]
     private var peerStateByID: [String: PeerDeviceState] = [:]
     private var lastInviteAttemptByDeviceID: [String: Date] = [:]
-    private var trustedDeviceIDs: Set<String>
-    private var blockedDeviceIDs: Set<String>
-    private var autoSyncDisabledDeviceIDs: Set<String>
+    private var pendingConnectionAttemptAtByDeviceID: [String: Date] = [:]
+    private var deviceTrustStore: DeviceTrustStore
     private var pinnedFingerprints: Set<String>
     private var favoriteFingerprints: Set<String>
     private var excludedAppMap: [String: String]
@@ -200,40 +175,31 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var connectivityWatchdogTask: Task<Void, Never>?
     private var lostPeerTasksByDeviceID: [String: Task<Void, Never>] = [:]
     private var syncExpirationTask: Task<Void, Never>?
-    private var screenshotPreviewTask: Task<Void, Never>?
-    private var screenshotImportTask: Task<Void, Never>?
-    private var screenshotImportSource: DispatchSourceFileSystemObject?
-    private var screenshotImportFileDescriptor: CInt = -1
     private var thumbnailTasksByFingerprint: [String: Task<Void, Never>] = [:]
-    nonisolated(unsafe) private var screenshotShortcutEventTap: CFMachPort?
-    nonisolated(unsafe) private var screenshotShortcutRunLoopSource: CFRunLoopSource?
     private var clearCopiedStateTask: Task<Void, Never>?
     private var lastObservedChangeCount: Int
     private var lastKnownPayload: ClipboardPayload?
     private var pendingRemotePayload: ClipboardPayload?
-    private var knownScreenshotFileSignatures = Set<String>()
-    private var screenshotMonitorFolderPath: String?
+    private var sensitiveContentApproval: SensitiveContentApproval?
     private var lastConnectivityEventAt = Date()
     private var lastConnectivityResetAt: Date?
+    private var isPreparingForTermination = false
 
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
-    private static let importSystemScreenshotsEnabledKey = "import-system-screenshots-enabled"
-    private static let captureStandardScreenshotShortcutsEnabledKey = "capture-standard-screenshot-shortcuts-enabled"
-    private static let screenshotStyleSettingsKey = "screenshot-style-settings"
     private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
     private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
     private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
     private static let saveReceivedFilesToDiskKey = "save-received-files-to-disk"
     private static let savedItemsBaseDirectoryPathKey = "saved-items-base-directory-path"
     private static let temporarySyncUntilKey = "temporary-sync-until"
-    private static let trustedDeviceIDsKey = "trusted-device-ids"
-    private static let blockedDeviceIDsKey = "blocked-device-ids"
-    private static let autoSyncDisabledDeviceIDsKey = "auto-sync-disabled-device-ids"
     private static let pinnedFingerprintsKey = "pinned-fingerprints"
     private static let favoriteFingerprintsKey = "favorite-fingerprints"
     private static let excludedAppsKey = "excluded-app-map"
     private static let requireDeviceApprovalKey = "require-device-approval"
+    private static let requireIncomingClipboardApprovalKey = "require-incoming-clipboard-approval"
+    private static let applyAppPoliciesToIncomingItemsKey = "apply-app-policies-to-incoming-items"
+    private static let blockPasswordManagerClipsKey = "block-password-manager-clips"
 
     override init() {
         let hostName = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -241,32 +207,25 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let defaults = UserDefaults.standard
         let storedAppearance = defaults.string(forKey: Self.appearancePreferenceKey)
         let appearance = AppearancePreference(rawValue: storedAppearance ?? "") ?? .automatic
-        let frontmost = Self.frontmostApplicationInfo()
-        let loadedScreenshotStyleSettings = Self.loadScreenshotStyleSettings(forKey: Self.screenshotStyleSettingsKey)
+        let frontmost = MacSystemServices.frontmostApplicationInfo()
 
         self.localDeviceName = resolvedName
         self.appearancePreference = appearance
         self.deviceID = Self.loadOrCreateDeviceID()
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
-        self.screenshotStyleSettings = loadedScreenshotStyleSettings
-        self.importSystemScreenshotsEnabled = defaults.object(forKey: Self.importSystemScreenshotsEnabledKey) as? Bool ?? true
-        self.captureStandardScreenshotShortcutsEnabled =
-            defaults.object(forKey: Self.captureStandardScreenshotShortcutsEnabledKey) as? Bool ?? false
         self.saveReceivedItemsToDiskEnabled = defaults.object(forKey: Self.saveReceivedItemsToDiskEnabledKey) as? Bool ?? false
         self.saveReceivedImagesToDisk = defaults.object(forKey: Self.saveReceivedImagesToDiskKey) as? Bool ?? true
         self.saveReceivedTextToDisk = defaults.object(forKey: Self.saveReceivedTextToDiskKey) as? Bool ?? true
         self.saveReceivedFilesToDisk = defaults.object(forKey: Self.saveReceivedFilesToDiskKey) as? Bool ?? true
         self.savedItemsBaseDirectoryPath = defaults.string(forKey: Self.savedItemsBaseDirectoryPathKey)
-            ?? Self.defaultSavedItemsBaseDirectory.path
+            ?? ReceivedItemDiskStore.defaultBaseDirectory.path
         self.requireDeviceApproval = defaults.object(forKey: Self.requireDeviceApprovalKey) as? Bool ?? true
-        self.screenshotShortcutCapturePermissionGranted = Self.isAccessibilityTrusted()
-        self.screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.preflightPermission()
-        self.screenshotStylePreviewImage = ScreenshotStyleRenderer.previewImage(using: loadedScreenshotStyleSettings)
+        self.requireIncomingClipboardApproval = defaults.object(forKey: Self.requireIncomingClipboardApprovalKey) as? Bool ?? false
+        self.applyAppPoliciesToIncomingItems = defaults.object(forKey: Self.applyAppPoliciesToIncomingItemsKey) as? Bool ?? true
+        self.blockPasswordManagerClips = defaults.object(forKey: Self.blockPasswordManagerClipsKey) as? Bool ?? true
         self.temporarySyncUntil = defaults.object(forKey: Self.temporarySyncUntilKey) as? Date
-        self.trustedDeviceIDs = Self.loadStringSet(forKey: Self.trustedDeviceIDsKey)
-        self.blockedDeviceIDs = Self.loadStringSet(forKey: Self.blockedDeviceIDsKey)
-        self.autoSyncDisabledDeviceIDs = Self.loadStringSet(forKey: Self.autoSyncDisabledDeviceIDsKey)
+        self.deviceTrustStore = DeviceTrustStore(defaults: defaults)
         self.pinnedFingerprints = Self.loadStringSet(forKey: Self.pinnedFingerprintsKey)
         self.favoriteFingerprints = Self.loadStringSet(forKey: Self.favoriteFingerprintsKey)
         self.excludedAppMap = Self.loadStringDictionary(forKey: Self.excludedAppsKey)
@@ -274,7 +233,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.effectiveColorScheme = .light
         self.appIconImage = AppIconProvider.loadAppIcon()
         self.lastObservedChangeCount = NSPasteboard.general.changeCount
-        self.lastKnownPayload = Self.readClipboardPayload(
+        self.lastKnownPayload = ClipboardPayloadReader.readPayload(
             from: NSPasteboard.general,
             maxInlineAttachmentBytes: 8 * 1024 * 1024,
             sourceAppBundleID: frontmost.bundleID,
@@ -301,7 +260,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             self.syncEnabled = false
         }
 
-        if let payload = lastKnownPayload, !shouldSuppressSync(for: payload) {
+        if hasSubscriptionAccess, let payload = lastKnownPayload, !shouldSuppressSync(for: payload) {
             _ = recordHistory(
                 payload: payload,
                 source: "Current clipboard on this Mac",
@@ -310,40 +269,40 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             )
         }
 
-        startServices()
-        startClipboardMonitor()
         startAppearanceMonitor()
-        startConnectivityHeartbeat()
-        startConnectivityWatchdog()
         registerConnectivityObservers()
-        scheduleSyncExpirationTask()
-        restartScreenshotImportMonitorIfNeeded()
-        restartScreenshotShortcutCaptureIfNeeded()
-        statusText = connectedPeerCount == 0 ? "Approve a nearby Mac or keep syncing locally." : "Ready."
+        statusText = "Checking subscription..."
     }
 
     deinit {
-        clipboardTask?.cancel()
-        appearanceTask?.cancel()
-        connectivityHeartbeatTask?.cancel()
-        connectivityWatchdogTask?.cancel()
-        lostPeerTasksByDeviceID.values.forEach { $0.cancel() }
-        syncExpirationTask?.cancel()
-        screenshotPreviewTask?.cancel()
-        screenshotImportTask?.cancel()
-        screenshotImportSource?.cancel()
-        thumbnailTasksByFingerprint.values.forEach { $0.cancel() }
-        clearCopiedStateTask?.cancel()
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
-        if let source = screenshotShortcutRunLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-            screenshotShortcutRunLoopSource = nil
+        MainActor.assumeIsolated {
+            prepareForTermination()
         }
+    }
 
-        if let tap = screenshotShortcutEventTap {
-            CFMachPortInvalidate(tap)
-            screenshotShortcutEventTap = nil
-        }
+    func prepareForTermination() {
+        guard !isPreparingForTermination else { return }
+        isPreparingForTermination = true
+
+        clipboardTask?.cancel()
+        clipboardTask = nil
+        appearanceTask?.cancel()
+        appearanceTask = nil
+        connectivityHeartbeatTask?.cancel()
+        connectivityHeartbeatTask = nil
+        connectivityWatchdogTask?.cancel()
+        connectivityWatchdogTask = nil
+        lostPeerTasksByDeviceID.values.forEach { $0.cancel() }
+        lostPeerTasksByDeviceID.removeAll()
+        syncExpirationTask?.cancel()
+        syncExpirationTask = nil
+        thumbnailTasksByFingerprint.values.forEach { $0.cancel() }
+        thumbnailTasksByFingerprint.removeAll()
+        clearCopiedStateTask?.cancel()
+        clearCopiedStateTask = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        stopServices()
+        session = nil
     }
 
     var discoveredPeerCount: Int {
@@ -362,7 +321,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     var latestClipboardItem: ClipboardHistoryItem? {
-        clipboardHistory.sorted(by: historySort).first
+        ClipboardHistoryStore.sorted(clipboardHistory).first
     }
 
     func imageThumbnail(for item: ClipboardHistoryItem) -> NSImage? {
@@ -374,7 +333,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     var hasClearableHistory: Bool {
-        clipboardHistory.contains(where: { !$0.isPinned && !$0.isFavorite })
+        ClipboardHistoryStore.hasClearableItems(clipboardHistory)
     }
 
     var trustedConnectedPeers: [PeerDeviceState] {
@@ -398,6 +357,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     var syncModeSummary: String {
+        guard hasSubscriptionAccess else { return "Subscription required" }
         guard syncEnabled else { return "Manual" }
 
         if let temporarySyncUntil {
@@ -419,62 +379,61 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         excludedApplications.count
     }
 
-    var screenshotImportFolderDisplayPath: String {
-        (systemScreenshotFolderURL.path as NSString).abbreviatingWithTildeInPath
-    }
-
-    var missingPermissionCount: Int {
-        [
-            screenshotShortcutCapturePermissionGranted,
-            screenshotScreenRecordingPermissionGranted
-        ]
-        .filter { !$0 }
-        .count
-    }
-
-    var hasPendingSetupPermissions: Bool {
-        missingPermissionCount > 0
-    }
-
-    var permissionsStatusSummary: String {
-        switch missingPermissionCount {
-        case 0:
-            return "All required screenshot permissions are granted."
-        case 1:
-            return "1 permission still needs attention."
-        default:
-            return "\(missingPermissionCount) permissions still need attention."
-        }
-    }
-
-    var screenshotShortcutCaptureStatusText: String {
-        if !captureStandardScreenshotShortcutsEnabled {
-            return "Off"
-        }
-
-        if !screenshotShortcutCapturePermissionGranted {
-            return "Needs Accessibility permission"
-        }
-
-        if !screenshotScreenRecordingPermissionGranted {
-            return "Needs Screen Recording permission"
-        }
-
-        return screenshotShortcutCaptureActive ? "Ready" : "Waiting to attach"
-    }
-
     var savedItemsDirectoryDisplayPath: String {
         (savedItemsBaseDirectoryPath as NSString).abbreviatingWithTildeInPath
     }
 
-    func filteredHistory(searchText: String, filter: HistoryFilter) -> [ClipboardHistoryItem] {
-        clipboardHistory
-            .filter { item in
-                guard filter.matches(item.kind) else { return false }
-                guard !searchText.isEmpty else { return true }
-                return item.payload.searchableText.contains(searchText.lowercased())
+    func setSubscriptionAccess(_ hasAccess: Bool) {
+        if hasSubscriptionAccess == hasAccess {
+            if !hasAccess {
+                statusText = "Start your AirCopy subscription to sync between Macs."
             }
-            .sorted(by: historySort)
+            return
+        }
+
+        hasSubscriptionAccess = hasAccess
+
+        if hasAccess {
+            startSubscriptionServices()
+        } else {
+            stopSubscriptionServices()
+            statusText = "Start your AirCopy subscription to sync between Macs."
+        }
+    }
+
+    func filteredHistory(searchText: String, filter: HistoryFilter) -> [ClipboardHistoryItem] {
+        ClipboardHistoryStore.filtered(clipboardHistory, searchText: searchText, filter: filter)
+    }
+
+    func acceptIncomingClipboardItem(_ item: IncomingClipboardItem) {
+        acceptIncomingClipboardItem(id: item.id)
+    }
+
+    func acceptIncomingClipboardItem(id: UUID) {
+        guard requireSubscriptionAccess(message: "Start your AirCopy subscription to accept team clips.") else { return }
+        guard let item = incomingClipboardItems.first(where: { $0.id == id }) else {
+            statusText = "That inbox item is no longer available."
+            return
+        }
+        guard guardSensitivePayload(item.payload, action: .acceptIncoming) else { return }
+
+        applyIncomingClipboardItem(item, statusPrefix: "Copied")
+    }
+
+    func rejectIncomingClipboardItem(_ item: IncomingClipboardItem) {
+        guard incomingClipboardItems.contains(where: { $0.id == item.id }) else { return }
+
+        incomingClipboardItems.removeAll { $0.id == item.id }
+        sendReceipt(.skipped, for: item.message, toDeviceID: item.senderID)
+        statusText = "Rejected clip from \(item.senderName)."
+    }
+
+    func clearIncomingClipboardItems() {
+        let originalCount = incomingClipboardItems.count
+        incomingClipboardItems.removeAll()
+        statusText = originalCount == 0
+            ? "Inbox is already empty."
+            : "Cleared \(originalCount) inbox item\(originalCount == 1 ? "" : "s")."
     }
 
     func restoreHistoryItem(_ item: ClipboardHistoryItem) {
@@ -482,6 +441,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func restoreHistoryItem(id: UUID) {
+        guard requireSubscriptionAccess(message: "Start your AirCopy subscription to restore clipboard history.") else { return }
+
         guard let item = clipboardHistory.first(where: { $0.id == id }) else {
             statusText = "That history item is no longer available."
             return
@@ -505,14 +466,18 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func sendHistoryItem(_ item: ClipboardHistoryItem, to deviceID: String) {
+        guard requireSubscriptionAccess() else { return }
+        guard guardSensitivePayload(item.payload, action: .manualSend) else { return }
         sendPayload(item.payload, toDeviceIDs: [deviceID], historyItemID: item.id, sendOnly: true)
     }
 
     func sendCurrentClipboard(to deviceID: String) {
-        let frontmost = Self.frontmostApplicationInfo()
+        guard requireSubscriptionAccess() else { return }
+
+        let frontmost = MacSystemServices.frontmostApplicationInfo()
         frontmostApplicationName = frontmost.name ?? frontmostApplicationName
 
-        guard let payload = Self.readClipboardPayload(
+        guard let payload = ClipboardPayloadReader.readPayload(
             from: NSPasteboard.general,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
             sourceAppBundleID: frontmost.bundleID,
@@ -523,6 +488,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         guard !shouldSuppressSync(for: payload) else { return }
+        guard guardSensitivePayload(payload, action: .manualSend) else { return }
 
         let item = recordHistory(
             payload: payload,
@@ -534,6 +500,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func startTemporarySync(minutes: Int = 10) {
+        guard requireSubscriptionAccess() else { return }
         syncEnabled = true
         temporarySyncUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
         statusText = "Sync enabled for \(minutes) minutes."
@@ -541,6 +508,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     func setSyncToAllEnabled(_ enabled: Bool) {
         if enabled {
+            guard requireSubscriptionAccess() else { return }
             temporarySyncUntil = nil
             enableAutoSyncForAllTrustedDevices()
             syncEnabled = true
@@ -569,11 +537,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func clearNonRetainedHistory() {
-        let removedCount = clipboardHistory.reduce(into: 0) { count, item in
-            if !item.isPinned && !item.isFavorite {
-                count += 1
-            }
-        }
+        let removedCount = ClipboardHistoryStore.clearNonRetainedItems(&clipboardHistory)
 
         guard removedCount > 0 else {
             statusText = "Only pinned and favorited clips remain."
@@ -582,6 +546,20 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         clipboardHistory.removeAll { !$0.isPinned && !$0.isFavorite }
         statusText = "Cleared \(removedCount) history item\(removedCount == 1 ? "" : "s")."
+    }
+
+    func deleteHistoryItem(_ item: ClipboardHistoryItem) {
+        deleteHistoryItem(id: item.id)
+    }
+
+    func deleteHistoryItem(id: UUID) {
+        guard let index = clipboardHistory.firstIndex(where: { $0.id == id }) else { return }
+        let removed = clipboardHistory.remove(at: index)
+        pinnedFingerprints.remove(removed.fingerprint)
+        favoriteFingerprints.remove(removed.fingerprint)
+        saveStringSet(pinnedFingerprints, key: Self.pinnedFingerprintsKey)
+        saveStringSet(favoriteFingerprints, key: Self.favoriteFingerprintsKey)
+        statusText = "Clip deleted."
     }
 
     func togglePin(for item: ClipboardHistoryItem) {
@@ -613,15 +591,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func setAutoSyncEnabled(_ enabled: Bool, for deviceID: String) {
-        guard trustedDeviceIDs.contains(deviceID) else { return }
-
-        if enabled {
-            autoSyncDisabledDeviceIDs.remove(deviceID)
-        } else {
-            autoSyncDisabledDeviceIDs.insert(deviceID)
+        guard trustState(for: deviceID) == .trusted else {
+            statusText = "Trust this Mac before changing auto-sync."
+            return
         }
 
-        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
+        deviceTrustStore.setAutoSyncEnabled(enabled, for: deviceID)
         updatePeer(deviceID: deviceID) { peer in
             peer.isAutoSyncEnabled = enabled
         }
@@ -680,7 +655,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         do {
-            let url = try temporaryFileURL(for: "AirCopy-Latest.png", data: imageData)
+            let url = try ClipboardPayloadWriter.temporaryFileURL(for: "AirCopy-Latest.png", data: imageData)
             NSWorkspace.shared.open(url)
             statusText = "Opened latest image."
         } catch {
@@ -689,24 +664,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func trustPeer(_ deviceID: String) {
-        trustedDeviceIDs.insert(deviceID)
-        blockedDeviceIDs.remove(deviceID)
-        autoSyncDisabledDeviceIDs.remove(deviceID)
-        saveStringSet(trustedDeviceIDs, key: Self.trustedDeviceIDsKey)
-        saveStringSet(blockedDeviceIDs, key: Self.blockedDeviceIDsKey)
-        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
+        deviceTrustStore.trust(deviceID)
         updateTrustState(for: deviceID, to: .trusted)
         inviteIfPossible(deviceID: deviceID)
         statusText = "Trusted \(peerStateByID[deviceID]?.displayName ?? "device")."
     }
 
     func blockPeer(_ deviceID: String) {
-        blockedDeviceIDs.insert(deviceID)
-        trustedDeviceIDs.remove(deviceID)
-        autoSyncDisabledDeviceIDs.remove(deviceID)
-        saveStringSet(blockedDeviceIDs, key: Self.blockedDeviceIDsKey)
-        saveStringSet(trustedDeviceIDs, key: Self.trustedDeviceIDsKey)
-        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
+        deviceTrustStore.block(deviceID)
         updateTrustState(for: deviceID, to: .blocked)
 
         if let peer = peerIDByDeviceID[deviceID] {
@@ -717,7 +682,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func addFrontmostApplicationToExclusions() {
-        let frontmost = Self.frontmostApplicationInfo()
+        let frontmost = MacSystemServices.frontmostApplicationInfo()
         guard let bundleID = frontmost.bundleID else {
             statusText = "No frontmost app was detected."
             return
@@ -736,8 +701,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func showMainWindow() {
-        refreshScreenshotShortcutPermission(prompt: false)
-        refreshScreenshotScreenRecordingPermission()
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first {
             window.orderFrontRegardless()
@@ -750,92 +713,64 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         settingsPresented = true
     }
 
-    func captureSelectionScreenshot() {
-        let trace = beginScreenshotTrace(origin: "Manual selection capture")
-        beginNativeScreenshotCapture(.selection, triggeredByShortcut: false, trace: trace)
-    }
-
-    func captureFullScreenScreenshot() {
-        let trace = beginScreenshotTrace(origin: "Manual full-screen capture")
-        beginNativeScreenshotCapture(.fullScreen, triggeredByShortcut: false, trace: trace)
-    }
-
-    func openAccessibilityPrivacySettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
-            return
+    private func startSubscriptionServices() {
+        if let temporarySyncUntil, temporarySyncUntil <= Date() {
+            self.temporarySyncUntil = nil
+            syncEnabled = false
         }
 
-        NSWorkspace.shared.open(url)
-    }
-
-    func openScreenRecordingPrivacySettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
-            return
+        if let payload = lastKnownPayload,
+           !clipboardHistory.contains(where: { $0.fingerprint == payload.fingerprint }),
+           !shouldSuppressSync(for: payload) {
+            _ = recordHistory(
+                payload: payload,
+                source: "Current clipboard on this Mac",
+                senderName: localDeviceName,
+                date: Date()
+            )
         }
 
-        NSWorkspace.shared.open(url)
-    }
-
-    func revealCurrentAppInFinder() {
-        let targetURL = Self.canonicalInstalledAppURL()
-        let resolvedURL = FileManager.default.fileExists(atPath: targetURL.path) ? targetURL : Bundle.main.bundleURL
-        _ = NSWorkspace.shared.selectFile(resolvedURL.path, inFileViewerRootedAtPath: "")
-        statusText = "Revealed AirCopy.app in Finder."
-    }
-
-    func refreshPermissionStates() {
-        refreshScreenshotShortcutPermission(prompt: false)
-        refreshScreenshotScreenRecordingPermission()
-        attachScreenshotShortcutCaptureIfNeeded()
-    }
-
-    func requestAccessibilityPermission() {
-        refreshScreenshotShortcutPermission(prompt: true)
-        attachScreenshotShortcutCaptureIfNeeded()
-
-        if screenshotShortcutCapturePermissionGranted {
-            statusText = "Accessibility permission granted."
-        } else {
-            statusText = "Enable Accessibility for AirCopy."
-            openAccessibilityPrivacySettings()
-        }
-    }
-
-    func requestScreenRecordingPermission() {
-        screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.requestPermission()
-
-        if screenshotScreenRecordingPermissionGranted {
-            statusText = "Screen Recording permission granted."
-        } else {
-            statusText = "Enable Screen Recording for AirCopy."
-            openScreenRecordingPrivacySettings()
-        }
-    }
-
-    func copyScreenshotDiagnostics() {
-        let lines = screenshotDebugEvents.map {
-            "\($0.timestamp.formatted(date: .omitted, time: .standard))  \($0.message)"
+        if syncEnabled {
+            startServices()
         }
 
-        let report = [
-            "Summary: \(screenshotDebugSummary)",
-            "Shortcut status: \(screenshotShortcutCaptureStatusText)",
-            "Screen Recording: \(screenshotScreenRecordingPermissionGranted ? "Allowed" : "Needed")",
-            "Import fallback: \(importSystemScreenshotsEnabled ? "On" : "Off")",
-            "Watched folder: \(screenshotImportFolderDisplayPath)",
-            "",
-            lines.joined(separator: "\n")
-        ]
-        .joined(separator: "\n")
+        startClipboardMonitor()
+        startConnectivityHeartbeat()
+        startConnectivityWatchdog()
+        scheduleSyncExpirationTask()
 
-        let payload = ClipboardPayload(text: report, sourceAppBundleID: Bundle.main.bundleIdentifier, sourceAppName: "AirCopy")
-        lastKnownPayload = payload
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(report, forType: .string)
-        statusText = "Copied screenshot diagnostics."
+        statusText = syncEnabled
+            ? (connectedPeerCount == 0 ? "Approve a nearby Mac or keep syncing locally." : "Ready.")
+            : "Subscription active. Sync is off."
+    }
+
+    private func stopSubscriptionServices() {
+        stopServices()
+        clipboardTask?.cancel()
+        clipboardTask = nil
+        connectivityHeartbeatTask?.cancel()
+        connectivityHeartbeatTask = nil
+        connectivityWatchdogTask?.cancel()
+        connectivityWatchdogTask = nil
+        lostPeerTasksByDeviceID.values.forEach { $0.cancel() }
+        lostPeerTasksByDeviceID.removeAll()
+        syncExpirationTask?.cancel()
+        syncExpirationTask = nil
+    }
+
+    @discardableResult
+    private func requireSubscriptionAccess(message: String = "Start your AirCopy subscription to sync between Macs.") -> Bool {
+        guard hasSubscriptionAccess else {
+            statusText = message
+            return false
+        }
+
+        return true
     }
 
     private func startServices() {
+        guard !isPreparingForTermination else { return }
+        guard hasSubscriptionAccess else { return }
         guard advertiser == nil, browser == nil else { return }
 
         let advertiser = MCNearbyServiceAdvertiser(
@@ -856,17 +791,22 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func stopServices() {
+        advertiser?.delegate = nil
         advertiser?.stopAdvertisingPeer()
+        browser?.delegate = nil
         browser?.stopBrowsingForPeers()
         advertiser = nil
         browser = nil
-        session.disconnect()
+        session?.delegate = nil
+        session?.disconnect()
+        pendingConnectionAttemptAtByDeviceID.removeAll()
 
         for id in peerStateByID.keys {
             peerStateByID[id]?.isConnected = false
             peerStateByID[id]?.isDiscovered = false
         }
 
+        guard !isPreparingForTermination else { return }
         refreshPeerDevices()
         statusText = "Clipboard sync disabled."
     }
@@ -994,6 +934,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func rebuildSessionAndRestartServices(reason: String) {
+        guard !isPreparingForTermination else { return }
+
         let now = Date()
         if let lastConnectivityResetAt,
            now.timeIntervalSince(lastConnectivityResetAt) < minimumConnectivityResetSpacing {
@@ -1006,6 +948,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         browser?.stopBrowsingForPeers()
         advertiser = nil
         browser = nil
+        pendingConnectionAttemptAtByDeviceID.removeAll()
 
         let oldSession = session
         oldSession?.delegate = nil
@@ -1039,7 +982,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func recoverConnectivityIfNeeded(reason: String, allowSessionRebuild: Bool) {
-        guard syncEnabled else { return }
+        guard hasSubscriptionAccess, syncEnabled else { return }
 
         let reconnectableTrustedPeers = peerDevices.filter {
             $0.trustState == .trusted && ($0.isDiscovered || peerIDByDeviceID[$0.id] != nil)
@@ -1070,7 +1013,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func performConnectivityWatchdogCheck() {
-        guard syncEnabled else { return }
+        guard hasSubscriptionAccess, syncEnabled else { return }
 
         let trustedPeersNeedingAttention = peerDevices.filter {
             $0.trustState == .trusted && !$0.isConnected && ($0.isDiscovered || peerIDByDeviceID[$0.id] != nil)
@@ -1082,426 +1025,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             reason: "Refreshing the nearby Mac connection...",
             allowSessionRebuild: true
         )
-    }
-
-    private func restartScreenshotShortcutCaptureIfNeeded(promptForPermission: Bool = false) {
-        stopScreenshotShortcutCapture()
-        attachScreenshotShortcutCaptureIfNeeded(promptForPermission: promptForPermission)
-    }
-
-    private func attachScreenshotShortcutCaptureIfNeeded(promptForPermission: Bool = false) {
-        refreshScreenshotShortcutPermission(prompt: promptForPermission)
-
-        guard captureStandardScreenshotShortcutsEnabled else { return }
-        guard screenshotShortcutCapturePermissionGranted else {
-            statusText = "Allow Accessibility access so AirCopy can handle Cmd-Shift-3 and Cmd-Shift-4."
-            return
-        }
-        guard !screenshotShortcutCaptureActive, screenshotShortcutEventTap == nil, screenshotShortcutRunLoopSource == nil else {
-            return
-        }
-
-        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: { _, type, event, userInfo in
-                guard let userInfo else {
-                    return Unmanaged.passUnretained(event)
-                }
-
-                let coordinator = Unmanaged<AirCopyCoordinator>.fromOpaque(userInfo).takeUnretainedValue()
-
-                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                    Task { @MainActor in
-                        coordinator.reenableScreenshotShortcutCaptureIfNeeded()
-                    }
-
-                    return Unmanaged.passUnretained(event)
-                }
-
-                guard let mode = AirCopyCoordinator.screenshotShortcutMode(for: type, event: event) else {
-                    return Unmanaged.passUnretained(event)
-                }
-
-                Task { @MainActor in
-                    coordinator.handleScreenshotShortcut(mode)
-                }
-
-                return nil
-            },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            screenshotShortcutCaptureActive = false
-            statusText = "AirCopy could not attach screenshot shortcuts yet."
-            return
-        }
-
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        screenshotShortcutEventTap = tap
-        screenshotShortcutRunLoopSource = source
-
-        if let source {
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        }
-
-        CGEvent.tapEnable(tap: tap, enable: true)
-        screenshotShortcutCaptureActive = true
-    }
-
-    private func stopScreenshotShortcutCapture() {
-        screenshotShortcutCaptureActive = false
-
-        if let source = screenshotShortcutRunLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-            screenshotShortcutRunLoopSource = nil
-        }
-
-        if let tap = screenshotShortcutEventTap {
-            CFMachPortInvalidate(tap)
-            screenshotShortcutEventTap = nil
-        }
-    }
-
-    private func refreshScreenshotShortcutPermission(prompt: Bool) {
-        screenshotShortcutCapturePermissionGranted = Self.isAccessibilityTrusted(prompt: prompt)
-    }
-
-    private func refreshScreenshotScreenRecordingPermission() {
-        screenshotScreenRecordingPermissionGranted = NativeScreenshotCaptureController.preflightPermission()
-    }
-
-    private func scheduleScreenshotStylePreviewUpdate() {
-        screenshotPreviewTask?.cancel()
-        let settings = screenshotStyleSettings
-
-        screenshotPreviewTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(140))
-            guard !Task.isCancelled else { return }
-            guard let self, self.screenshotStyleSettings == settings else { return }
-            self.screenshotStylePreviewImage = ScreenshotStyleRenderer.previewImage(using: settings)
-        }
-    }
-
-    private func reenableScreenshotShortcutCaptureIfNeeded() {
-        guard let tap = screenshotShortcutEventTap else { return }
-        CGEvent.tapEnable(tap: tap, enable: true)
-    }
-
-    private func handleScreenshotShortcut(_ mode: ScreenshotShortcutMode) {
-        guard captureStandardScreenshotShortcutsEnabled else { return }
-        guard screenshotShortcutCapturePermissionGranted else {
-            statusText = "Allow Accessibility access so AirCopy can handle standard screenshot shortcuts."
-            return
-        }
-        let origin = mode == .selection ? "Shortcut selection capture" : "Shortcut full-screen capture"
-        let trace = beginScreenshotTrace(origin: origin)
-        beginNativeScreenshotCapture(mode, triggeredByShortcut: true, trace: trace)
-    }
-
-    private func beginNativeScreenshotCapture(
-        _ mode: ScreenshotShortcutMode,
-        triggeredByShortcut: Bool,
-        trace: ScreenshotTrace?
-    ) {
-        let captureMode: NativeScreenshotCaptureMode = mode == .selection ? .selection : .currentDisplay
-        refreshScreenshotScreenRecordingPermission()
-        var trace = trace ?? beginScreenshotTrace(
-            origin: mode == .selection ? "Selection capture" : "Full-screen capture"
-        )
-        markScreenshotTrace(
-            &trace,
-            mode == .selection ? "Waiting for selection" : "Starting capture"
-        )
-
-        statusText = mode == .selection
-            ? "Select an area to capture with AirCopy."
-            : "Capturing the current display with AirCopy."
-
-        nativeScreenshotCapture.capture(captureMode, promptForPermission: true) { [weak self] result in
-            guard let self else { return }
-            self.refreshScreenshotScreenRecordingPermission()
-
-            switch result {
-            case .success(let imageData):
-                self.markScreenshotTrace(
-                    &trace,
-                    "Pixels ready (\(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file)))"
-                )
-                _ = self.ingestLocalScreenshotPayload(
-                    imageData: imageData,
-                    source: triggeredByShortcut
-                        ? "Captured with AirCopy shortcut"
-                        : "Captured with AirCopy",
-                    imagePausedStatus: "Captured screenshot locally. Image sync is paused.",
-                    syncOffStatus: "Captured screenshot locally. Sync is off.",
-                    trace: trace
-                )
-            case .failure(let error):
-                self.finishScreenshotTrace(trace, outcome: "Failed: \(error.errorDescription ?? "Capture failed")")
-                self.statusText = error.errorDescription ?? "AirCopy screenshot capture failed."
-            }
-        }
-    }
-
-    private func restartScreenshotImportMonitorIfNeeded() {
-        stopScreenshotImportMonitor()
-        screenshotMonitorFolderPath = nil
-        knownScreenshotFileSignatures.removeAll()
-
-        guard importSystemScreenshotsEnabled else { return }
-
-        seedKnownScreenshotFiles()
-        attachScreenshotImportWatcher()
-    }
-
-    private func stopScreenshotImportMonitor() {
-        screenshotImportTask?.cancel()
-        screenshotImportTask = nil
-        screenshotImportSource?.cancel()
-        screenshotImportSource = nil
-        screenshotImportFileDescriptor = -1
-    }
-
-    private func attachScreenshotImportWatcher() {
-        let folderURL = systemScreenshotFolderURL
-        let fileDescriptor = open(folderURL.path, O_EVTONLY)
-
-        guard fileDescriptor >= 0 else {
-            statusText = "Unable to watch \(screenshotImportFolderDisplayPath)."
-            return
-        }
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: [.write, .rename, .delete, .extend, .attrib],
-            queue: DispatchQueue.main
-        )
-
-        source.setEventHandler { [weak self] in
-            self?.scheduleScreenshotFolderPoll()
-        }
-
-        source.setCancelHandler { [fileDescriptor] in
-            close(fileDescriptor)
-        }
-
-        screenshotImportFileDescriptor = fileDescriptor
-        screenshotImportSource = source
-        source.resume()
-        scheduleScreenshotFolderPoll()
-    }
-
-    private func scheduleScreenshotFolderPoll() {
-        screenshotImportTask?.cancel()
-        screenshotImportTask = Task { [weak self] in
-            await MainActor.run {
-                self?.pollScreenshotFolder()
-            }
-
-            for _ in 0..<6 {
-                try? await Task.sleep(for: .milliseconds(45))
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self?.pollScreenshotFolder()
-                }
-            }
-        }
-    }
-
-    private func seedKnownScreenshotFiles() {
-        let folderURL = systemScreenshotFolderURL
-        screenshotMonitorFolderPath = folderURL.path
-        guard let candidates = screenshotCandidateFiles(in: folderURL) else {
-            statusText = "Allow access to \(screenshotImportFolderDisplayPath) so AirCopy can import standard screenshots."
-            return
-        }
-
-        knownScreenshotFileSignatures = Set(candidates.map(fileSignature(for:)))
-    }
-
-    private func pollScreenshotFolder() {
-        let folderURL = systemScreenshotFolderURL
-
-        if screenshotMonitorFolderPath != folderURL.path {
-            restartScreenshotImportMonitorIfNeeded()
-            return
-        }
-
-        guard let candidates = screenshotCandidateFiles(in: folderURL) else {
-            statusText = "Allow access to \(screenshotImportFolderDisplayPath) so AirCopy can import standard screenshots."
-            return
-        }
-        guard !candidates.isEmpty else { return }
-
-        for url in candidates.sorted(by: screenshotFileSort) {
-            let signature = fileSignature(for: url)
-            guard !knownScreenshotFileSignatures.contains(signature) else { continue }
-
-            if importScreenshotFile(at: url) {
-                knownScreenshotFileSignatures.insert(signature)
-            }
-        }
-    }
-
-    private func screenshotFileSort(_ lhs: URL, _ rhs: URL) -> Bool {
-        screenshotTimestamp(for: lhs) < screenshotTimestamp(for: rhs)
-    }
-
-    @discardableResult
-    private func importScreenshotFile(at fileURL: URL) -> Bool {
-        let fileTimestamp = screenshotTimestamp(for: fileURL)
-        let age = Date().timeIntervalSince(fileTimestamp)
-        guard age >= 0.08 else { return false }
-
-        var trace = beginScreenshotTrace(
-            origin: "Fallback screenshot import",
-            startedAt: fileTimestamp
-        )
-        markScreenshotTrace(&trace, "Detected \(fileURL.lastPathComponent)")
-        markScreenshotTrace(&trace, "File age at import \(Self.screenshotDebugDurationLabel(age))")
-        guard let imageData = try? Data(contentsOf: fileURL), !imageData.isEmpty else {
-            finishScreenshotTrace(trace, outcome: "Failed to read screenshot file")
-            return false
-        }
-        guard NSImage(data: imageData) != nil else {
-            finishScreenshotTrace(trace, outcome: "File was not a readable image")
-            return false
-        }
-
-        return ingestLocalScreenshotPayload(
-            imageData: imageData,
-            source: "Imported from macOS screenshot",
-            imagePausedStatus: "Imported screenshot locally. Image sync is paused.",
-            syncOffStatus: "Imported screenshot locally. Sync is off.",
-            trace: trace
-        )
-    }
-
-    @discardableResult
-    private func ingestLocalScreenshotPayload(
-        imageData: Data,
-        source: String,
-        imagePausedStatus: String,
-        syncOffStatus: String,
-        trace: ScreenshotTrace?
-    ) -> Bool {
-        var trace = trace ?? beginScreenshotTrace(origin: source)
-        guard NSImage(data: imageData) != nil else {
-            finishScreenshotTrace(trace, outcome: "Image data was unreadable")
-            return false
-        }
-        markScreenshotTrace(&trace, "Validated image payload")
-
-        let payload = ClipboardPayload(
-            imageData: imageData,
-            sourceAppBundleID: nil,
-            sourceAppName: "Screenshot"
-        )
-
-        pendingRemotePayload = nil
-        lastKnownPayload = payload
-        let item = recordHistory(
-            payload: payload,
-            source: source,
-            senderName: localDeviceName,
-            date: Date()
-        )
-        markScreenshotTrace(&trace, "Inserted into history")
-        writePayloadToPasteboard(payload)
-        markScreenshotTrace(&trace, "Wrote to clipboard")
-
-        if !imageSyncEnabled {
-            finishScreenshotTrace(trace, outcome: "Done locally with image sync paused")
-            statusText = imagePausedStatus
-            return true
-        }
-
-        guard syncEnabled else {
-            finishScreenshotTrace(trace, outcome: "Done locally with sync off")
-            statusText = syncOffStatus
-            return true
-        }
-
-        statusText = "Screenshot captured."
-        markScreenshotTrace(&trace, "Queued sync")
-        schedulePayloadSend(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
-        finishScreenshotTrace(trace, outcome: "Ready for sync")
-        return true
-    }
-
-    private func schedulePayloadSend(
-        _ payload: ClipboardPayload,
-        toDeviceIDs targetDeviceIDs: [String],
-        historyItemID: UUID?
-    ) {
-        Task { @MainActor [weak self] in
-            await Task.yield()
-            guard let self else { return }
-            self.sendPayload(payload, toDeviceIDs: targetDeviceIDs, historyItemID: historyItemID)
-        }
-    }
-
-    private func beginScreenshotTrace(origin: String, startedAt: Date = Date()) -> ScreenshotTrace {
-        let trace = ScreenshotTrace(origin: origin, startedAt: startedAt, lastMarkAt: startedAt)
-        appendScreenshotDebugEvent("\(origin) started", at: startedAt)
-        screenshotDebugSummary = "\(origin) started"
-        return trace
-    }
-
-    private func markScreenshotTrace(_ trace: inout ScreenshotTrace, _ stage: String, at timestamp: Date = Date()) {
-        let step = timestamp.timeIntervalSince(trace.lastMarkAt)
-        let total = timestamp.timeIntervalSince(trace.startedAt)
-        appendScreenshotDebugEvent(
-            "\(trace.origin) • \(stage) • +\(Self.screenshotDebugDurationLabel(step)) / \(Self.screenshotDebugDurationLabel(total))",
-            at: timestamp
-        )
-        trace.lastMarkAt = timestamp
-    }
-
-    private func finishScreenshotTrace(_ trace: ScreenshotTrace, outcome: String, at timestamp: Date = Date()) {
-        let total = timestamp.timeIntervalSince(trace.startedAt)
-        let summary = "\(trace.origin) • \(outcome) • \(Self.screenshotDebugDurationLabel(total)) total"
-        appendScreenshotDebugEvent(summary, at: timestamp)
-        screenshotDebugSummary = summary
-    }
-
-    private func appendScreenshotDebugEvent(_ message: String, at timestamp: Date = Date()) {
-        screenshotDebugEvents.insert(
-            ScreenshotDebugEvent(timestamp: timestamp, message: message),
-            at: 0
-        )
-
-        if screenshotDebugEvents.count > 16 {
-            screenshotDebugEvents.removeLast(screenshotDebugEvents.count - 16)
-        }
-
-        print("[AirCopy Screenshot] \(message)")
-    }
-
-    private nonisolated static func screenshotDebugDurationLabel(_ interval: TimeInterval) -> String {
-        let milliseconds = Int((interval * 1000).rounded())
-        return "\(milliseconds)ms"
-    }
-
-    private nonisolated static func screenshotShortcutMode(for type: CGEventType, event: CGEvent) -> ScreenshotShortcutMode? {
-        guard type == .keyDown else { return nil }
-
-        let flags = event.flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate])
-        guard flags.contains(.maskCommand), flags.contains(.maskShift) else { return nil }
-        guard !flags.contains(.maskControl), !flags.contains(.maskAlternate) else { return nil }
-
-        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-        switch keyCode {
-        case CGKeyCode(kVK_ANSI_3):
-            return .fullScreen
-        case CGKeyCode(kVK_ANSI_4):
-            return .selection
-        default:
-            return nil
-        }
     }
 
     private func scheduleSyncExpirationTask() {
@@ -1536,7 +1059,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         localImagePausedStatus: String = "Saved image locally. Image sync is paused.",
         localSyncOffStatus: String = "Saved locally. Sync is off."
     ) -> Bool {
-        let frontmost = Self.frontmostApplicationInfo()
+        guard hasSubscriptionAccess else { return false }
+
+        let frontmost = MacSystemServices.frontmostApplicationInfo()
         frontmostApplicationName = frontmost.name ?? "Unknown App"
 
         let pasteboard = NSPasteboard.general
@@ -1545,7 +1070,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         guard changeCount != lastObservedChangeCount else { return false }
         lastObservedChangeCount = changeCount
 
-        guard let payload = Self.readClipboardPayload(
+        guard let rawPayload = ClipboardPayloadReader.readPayload(
             from: pasteboard,
             maxInlineAttachmentBytes: maxInlineAttachmentBytes,
             sourceAppBundleID: frontmost.bundleID,
@@ -1555,11 +1080,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return false
         }
 
-        if pendingRemotePayload == payload {
+        if pendingRemotePayload == rawPayload {
             pendingRemotePayload = nil
-            lastKnownPayload = payload
+            lastKnownPayload = rawPayload
             _ = recordHistory(
-                payload: payload,
+                payload: rawPayload,
                 source: "Received from a trusted Mac",
                 senderName: "Peer",
                 date: Date(),
@@ -1568,10 +1093,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return true
         }
 
+        let payload = rawPayload
         guard payload != lastKnownPayload else { return false }
         lastKnownPayload = payload
 
         guard !shouldSuppressSync(for: payload) else { return false }
+
+        if payload != rawPayload {
+            writePayloadToPasteboard(payload)
+        }
 
         let item = recordHistory(
             payload: payload,
@@ -1590,6 +1120,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return true
         }
 
+        guard guardSensitivePayload(payload, action: .automaticSync) else { return true }
+
         sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
         return true
     }
@@ -1600,6 +1132,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         historyItemID: UUID?,
         sendOnly: Bool = false
     ) {
+        guard requireSubscriptionAccess() else { return }
+
         let targets = targetDeviceIDs.compactMap { deviceID -> (String, PeerDeviceState, MCPeerID)? in
             guard let state = peerStateByID[deviceID], let peer = peerIDByDeviceID[deviceID] else { return nil }
             guard connectedDeviceIDs.contains(deviceID) || session.connectedPeers.contains(peer) else { return nil }
@@ -1673,12 +1207,64 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         guard !recentMessageSet.contains(message.id) else { return }
 
         rememberMessageID(message.id)
+        peerIDByDeviceID[message.senderID] = peer
 
         if message.payload.kind == .image && !imageSyncEnabled {
             statusText = "Ignored image from \(message.senderName). Image sync is paused."
+            sendReceipt(.skipped, for: message, to: peer)
             return
         }
 
+        if shouldSuppressIncomingClipboard(message.payload, senderName: message.senderName) {
+            sendReceipt(.skipped, for: message, to: peer)
+            return
+        }
+
+        if let senderDeviceID = peerDisplayNameToDeviceID[peer.displayName] {
+            updatePeer(deviceID: senderDeviceID) { peerState in
+                peerState.lastSyncAt = Date()
+                peerState.lastClipboardSummary = message.payload.title
+            }
+        }
+
+        noteConnectivityEvent()
+
+        if requireIncomingClipboardApproval {
+            enqueueIncomingClipboard(message)
+            sendReceipt(.delivered, for: message, to: peer)
+            statusText = "New \(message.payload.kind.title.lowercased()) from \(message.senderName) is waiting in the inbox."
+        } else {
+            applyIncomingClipboardMessage(message)
+            sendReceipt(.clipboardUpdated, for: message, to: peer)
+        }
+    }
+
+    private func enqueueIncomingClipboard(_ message: ClipboardMessage) {
+        if let index = incomingClipboardItems.firstIndex(where: { $0.id == message.id }) {
+            incomingClipboardItems[index].state = .pending
+        } else {
+            incomingClipboardItems.insert(
+                IncomingClipboardItem(message: message, receivedAt: Date(), state: .pending),
+                at: 0
+            )
+        }
+
+        if incomingClipboardItems.count > 48 {
+            incomingClipboardItems = Array(incomingClipboardItems.prefix(48))
+        }
+    }
+
+    private func applyIncomingClipboardItem(_ item: IncomingClipboardItem, statusPrefix: String) {
+        applyIncomingClipboardMessage(item.message, statusPrefix: statusPrefix)
+
+        if let index = incomingClipboardItems.firstIndex(where: { $0.id == item.id }) {
+            incomingClipboardItems[index].state = .accepted
+        }
+
+        sendReceipt(.clipboardUpdated, for: item.message, toDeviceID: item.senderID)
+    }
+
+    private func applyIncomingClipboardMessage(_ message: ClipboardMessage, statusPrefix: String = "Clipboard updated") {
         pendingRemotePayload = message.payload
         lastKnownPayload = message.payload
         writePayloadToPasteboard(message.payload)
@@ -1690,30 +1276,30 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             deliveredRemotely: true
         )
 
-        if let senderDeviceID = peerDisplayNameToDeviceID[peer.displayName] {
-            updatePeer(deviceID: senderDeviceID) { peerState in
-                peerState.lastSyncAt = Date()
-                peerState.lastClipboardSummary = message.payload.title
-            }
-        }
-
-        noteConnectivityEvent()
-
-        sendReceipt(.clipboardUpdated, for: message, to: peer)
         switch saveReceivedPayloadToDiskIfNeeded(message.payload, date: message.sentAt) {
         case .saved(let summary):
-            statusText = "Clipboard updated from \(message.senderName). \(summary)"
+            statusText = "\(statusPrefix) from \(message.senderName). \(summary)"
         case .failed(let summary):
-            statusText = "Clipboard updated from \(message.senderName). \(summary)"
+            statusText = "\(statusPrefix) from \(message.senderName). \(summary)"
         case .skipped:
-            statusText = "Clipboard updated from \(message.senderName)."
+            statusText = "\(statusPrefix) from \(message.senderName)."
         }
     }
 
     private func handleReceipt(_ receipt: ClipboardReceipt) {
         guard let historyItemID = outboundMessageHistoryMap[receipt.messageID] else { return }
 
-        let state: DeliveryState = receipt.kind == .clipboardUpdated ? .clipboardUpdated : .delivered
+        let state: DeliveryState
+
+        switch receipt.kind {
+        case .clipboardUpdated:
+            state = .clipboardUpdated
+        case .delivered:
+            state = .delivered
+        case .skipped:
+            state = .skipped
+        }
+
         updateReceipt(
             for: historyItemID,
             deviceID: receipt.recipientID,
@@ -1725,13 +1311,22 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         updatePeer(deviceID: receipt.recipientID) { peerState in
             peerState.lastSyncAt = receipt.sentAt
             peerState.lastReceiptState = state
-            peerState.lastReceiptText = state == .clipboardUpdated ? "Clipboard updated" : "Delivered"
+            peerState.lastReceiptText = state == .clipboardUpdated
+                ? "Clipboard updated"
+                : state.title
         }
 
         refreshPeerDevices()
-        statusText = state == .clipboardUpdated
-            ? "\(receipt.recipientName) updated its clipboard."
-            : "Delivered to \(receipt.recipientName)."
+        switch state {
+        case .clipboardUpdated:
+            statusText = "\(receipt.recipientName) updated its clipboard."
+        case .delivered:
+            statusText = "Delivered to \(receipt.recipientName)."
+        case .skipped:
+            statusText = "\(receipt.recipientName) skipped this clip."
+        case .pending, .failed:
+            statusText = state.title
+        }
     }
 
     private func handlePresence(_ presence: PeerPresence, from peer: MCPeerID) {
@@ -1769,6 +1364,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         } catch {
             statusText = "Failed to send receipt to \(message.senderName)."
         }
+    }
+
+    private func sendReceipt(_ kind: ClipboardReceiptKind, for message: ClipboardMessage, toDeviceID senderDeviceID: String) {
+        guard let peer = peerIDByDeviceID[senderDeviceID] else { return }
+        sendReceipt(kind, for: message, to: peer)
     }
 
     private func sendPresenceHeartbeatIfNeeded() {
@@ -1814,54 +1414,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func writePayloadToPasteboard(_ payload: ClipboardPayload) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-
-        switch payload.kind {
-        case .text, .code:
-            pasteboard.setString(payload.text ?? "", forType: .string)
-        case .link, .browserTab:
-            if let urlString = payload.urlString, let url = URL(string: urlString) {
-                _ = pasteboard.writeObjects([url as NSURL])
-                pasteboard.setString(urlString, forType: .string)
-
-                if let linkTitle = payload.linkTitle {
-                    pasteboard.setString(linkTitle, forType: NSPasteboard.PasteboardType("public.url-name"))
-                }
-            } else if let text = payload.text {
-                pasteboard.setString(text, forType: .string)
-            }
-        case .image:
-            if let data = payload.imageData, let image = NSImage(data: data) {
-                if !pasteboard.writeObjects([image]) {
-                    pasteboard.setData(data, forType: .png)
-                }
-            }
-        case .file, .folder:
-            writeAttachments(payload.attachments, to: pasteboard)
-        }
-
-        lastObservedChangeCount = pasteboard.changeCount
-    }
-
-    private func writeAttachments(_ attachments: [ClipboardAttachment], to pasteboard: NSPasteboard) {
-        let urls = attachments.compactMap { attachment in
-            if let inlineData = attachment.inlineData, !attachment.isDirectory {
-                return try? temporaryFileURL(for: attachment.name, data: inlineData)
-            }
-
-            let url = URL(fileURLWithPath: attachment.originalPath)
-            return FileManager.default.fileExists(atPath: url.path) ? url : nil
-        }
-
-        if !urls.isEmpty {
-            _ = pasteboard.writeObjects(urls as [NSURL])
-        }
-
-        let pathListing = attachments.map(\.originalPath).joined(separator: "\n")
-        if !pathListing.isEmpty {
-            pasteboard.setString(pathListing, forType: .string)
-        }
+        lastObservedChangeCount = ClipboardPayloadWriter.writePayloadToGeneralPasteboard(payload)
     }
 
     private func recordHistory(
@@ -1871,58 +1424,44 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         date: Date,
         deliveredRemotely: Bool = false
     ) -> ClipboardHistoryItem {
-        let existing = clipboardHistory.first(where: { $0.fingerprint == payload.fingerprint })
-
-        let item = ClipboardHistoryItem(
-            id: existing?.id ?? UUID(),
+        let item = ClipboardHistoryStore.record(
             payload: payload,
             source: source,
             senderName: senderName,
             date: date,
-            isPinned: existing?.isPinned ?? pinnedFingerprints.contains(payload.fingerprint),
-            isFavorite: existing?.isFavorite ?? favoriteFingerprints.contains(payload.fingerprint),
-            deviceReceipts: existing?.deviceReceipts ?? [],
-            lastSyncAt: deliveredRemotely ? date : existing?.lastSyncAt,
-            wasDeliveredRemotely: deliveredRemotely || (existing?.wasDeliveredRemotely ?? false)
+            deliveredRemotely: deliveredRemotely,
+            history: &clipboardHistory,
+            pinnedFingerprints: pinnedFingerprints,
+            favoriteFingerprints: favoriteFingerprints,
+            maxItems: maxHistoryItems
         )
-
-        clipboardHistory.removeAll { $0.fingerprint == payload.fingerprint }
-        clipboardHistory.append(item)
-        sortAndTrimHistory()
+        pruneThumbnailStateToCurrentHistory()
         scheduleThumbnailGenerationIfNeeded(for: item)
         return item
     }
 
     private func updateHistoryItem(id: UUID, source: String, senderName: String, date: Date) {
-        guard let index = clipboardHistory.firstIndex(where: { $0.id == id }) else { return }
-        clipboardHistory[index].source = source
-        clipboardHistory[index].senderName = senderName
-        clipboardHistory[index].date = date
-        sortAndTrimHistory()
+        guard ClipboardHistoryStore.updateItem(
+            id: id,
+            source: source,
+            senderName: senderName,
+            date: date,
+            history: &clipboardHistory,
+            maxItems: maxHistoryItems
+        ) else { return }
+        pruneThumbnailStateToCurrentHistory()
     }
 
     private func sortAndTrimHistory() {
-        clipboardHistory.sort(by: historySort)
-
-        if clipboardHistory.count > maxHistoryItems {
-            clipboardHistory = Array(clipboardHistory.prefix(maxHistoryItems))
-        }
-
-        let retainedFingerprints = Set(clipboardHistory.map(\.fingerprint))
+        let retainedFingerprints = ClipboardHistoryStore.sortAndTrim(&clipboardHistory, maxItems: maxHistoryItems)
         imageThumbnailByFingerprint = imageThumbnailByFingerprint.filter { retainedFingerprints.contains($0.key) }
         thumbnailTasksByFingerprint = thumbnailTasksByFingerprint.filter { retainedFingerprints.contains($0.key) }
     }
 
-    private func historySort(_ lhs: ClipboardHistoryItem, _ rhs: ClipboardHistoryItem) -> Bool {
-        if lhs.isPinned != rhs.isPinned {
-            return lhs.isPinned && !rhs.isPinned
-        }
-
-        if lhs.isFavorite != rhs.isFavorite {
-            return lhs.isFavorite && !rhs.isFavorite
-        }
-
-        return lhs.date > rhs.date
+    private func pruneThumbnailStateToCurrentHistory() {
+        let retainedFingerprints = Set(clipboardHistory.map(\.fingerprint))
+        imageThumbnailByFingerprint = imageThumbnailByFingerprint.filter { retainedFingerprints.contains($0.key) }
+        thumbnailTasksByFingerprint = thumbnailTasksByFingerprint.filter { retainedFingerprints.contains($0.key) }
     }
 
     private func markReceiptsPending(for historyItemID: UUID, targets: [(String, String)]) {
@@ -1978,6 +1517,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func playSelectionSound() {
+        guard soundEnabled else { return }
         if let sound = NSSound(named: NSSound.Name("Tink")) {
             sound.play()
         } else {
@@ -2004,54 +1544,16 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let fingerprint = item.fingerprint
 
         thumbnailTasksByFingerprint[fingerprint] = Task.detached(priority: .utility) { [sourceData] in
-            let thumbnailData = Self.thumbnailData(from: sourceData, maxPixelSize: 160)
+            let thumbnail = ClipboardThumbnailFactory.thumbnailImage(from: sourceData, maxPixelSize: 160)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 defer { self.thumbnailTasksByFingerprint[fingerprint] = nil }
 
-                guard let thumbnailData,
-                      let image = NSImage(data: thumbnailData) else {
-                    return
-                }
-
-                self.imageThumbnailByFingerprint[fingerprint] = image
+                guard let thumbnail else { return }
+                self.imageThumbnailByFingerprint[fingerprint] = thumbnail
             }
         }
-    }
-
-    private nonisolated static func thumbnailData(from imageData: Data, maxPixelSize: Int) -> Data? {
-        guard let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil) else {
-            return nil
-        }
-
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
-        ]
-
-        guard let thumbnailImage = CGImageSourceCreateThumbnailAtIndex(
-            imageSource,
-            0,
-            options as CFDictionary
-        ) else {
-            return nil
-        }
-
-        let mutableData = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            mutableData,
-            UTType.png.identifier as CFString,
-            1,
-            nil
-        ) else {
-            return nil
-        }
-
-        CGImageDestinationAddImage(destination, thumbnailImage, nil)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return mutableData as Data
     }
 
     private func markHistoryItemCopied(_ id: UUID) {
@@ -2079,15 +1581,23 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func inviteIfPossible(deviceID: String) {
-        guard trustedDeviceIDs.contains(deviceID) else { return }
+        guard shouldInitiateConnection(to: deviceID) else { return }
+        guard deviceTrustStore.isExplicitlyTrusted(deviceID) else { return }
         guard let peer = peerIDByDeviceID[deviceID] else { return }
         guard !session.connectedPeers.contains(peer) else { return }
+        guard !hasPendingConnection(to: deviceID) else { return }
         guard shouldAttemptInvite(to: deviceID) else { return }
 
         let context = PeerInvitationContext(deviceID: self.deviceID, deviceName: localDeviceName)
         let contextData = try? JSONEncoder().encode(context)
         lastInviteAttemptByDeviceID[deviceID] = Date()
+        markConnectionPending(to: deviceID)
         browser?.invitePeer(peer, to: session, withContext: contextData, timeout: 10)
+    }
+
+    private func shouldInitiateConnection(to remoteDeviceID: String) -> Bool {
+        guard remoteDeviceID != deviceID else { return false }
+        return deviceID.localizedStandardCompare(remoteDeviceID) == .orderedAscending
     }
 
     private func shouldAttemptInvite(to deviceID: String) -> Bool {
@@ -2096,6 +1606,19 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
 
         return Date().timeIntervalSince(lastAttemptAt) >= inviteRetryInterval
+    }
+
+    private func hasPendingConnection(to deviceID: String, at date: Date = Date()) -> Bool {
+        guard let pendingAt = pendingConnectionAttemptAtByDeviceID[deviceID] else { return false }
+        return date.timeIntervalSince(pendingAt) < pendingConnectionTimeout
+    }
+
+    private func markConnectionPending(to deviceID: String, at date: Date = Date()) {
+        pendingConnectionAttemptAtByDeviceID[deviceID] = date
+    }
+
+    private func clearPendingConnection(to deviceID: String) {
+        pendingConnectionAttemptAtByDeviceID.removeValue(forKey: deviceID)
     }
 
     private func updatePeer(deviceID: String, mutate: (inout PeerDeviceState) -> Void) {
@@ -2113,10 +1636,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func enableAutoSyncForAllTrustedDevices() {
-        autoSyncDisabledDeviceIDs.subtract(trustedDeviceIDs)
-        saveStringSet(autoSyncDisabledDeviceIDs, key: Self.autoSyncDisabledDeviceIDsKey)
+        let autoSyncEligibleDeviceIDs = deviceTrustStore.enableAutoSyncForAllTrustedDevices(
+            peerIDs: Set(peerStateByID.keys),
+            requireDeviceApproval: requireDeviceApproval
+        )
 
-        for deviceID in trustedDeviceIDs {
+        for deviceID in autoSyncEligibleDeviceIDs {
             updatePeer(deviceID: deviceID) { peer in
                 peer.isAutoSyncEnabled = true
             }
@@ -2147,9 +1672,13 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var connectedDeviceIDs: Set<String> {
         Set(
             session.connectedPeers.map { peer in
-                peerDisplayNameToDeviceID[peer.displayName] ?? peer.displayName
+                resolvedDeviceID(for: peer)
             }
         )
+    }
+
+    private func resolvedDeviceID(for peerID: MCPeerID) -> String {
+        deviceIDByPeerID[peerID] ?? peerDisplayNameToDeviceID[peerID.displayName] ?? peerID.displayName
     }
 
     private func reconcileConnectionStates() {
@@ -2219,312 +1748,77 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func trustState(for deviceID: String) -> PeerTrustState {
-        if blockedDeviceIDs.contains(deviceID) {
-            return .blocked
-        }
-
-        if trustedDeviceIDs.contains(deviceID) {
-            return .trusted
-        }
-
-        return requireDeviceApproval ? .pending : .trusted
+        deviceTrustStore.trustState(for: deviceID, requireDeviceApproval: requireDeviceApproval)
     }
 
     private func autoSyncEnabledState(for deviceID: String, trustState: PeerTrustState? = nil) -> Bool {
         let resolvedTrustState = trustState ?? self.trustState(for: deviceID)
-        guard resolvedTrustState == .trusted else { return false }
-        return !autoSyncDisabledDeviceIDs.contains(deviceID)
-    }
-
-    private var systemScreenshotFolderURL: URL {
-        if let location = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location"),
-           !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: (location as NSString).expandingTildeInPath, isDirectory: true)
-        }
-
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop", isDirectory: true)
+        return deviceTrustStore.isAutoSyncEnabled(for: deviceID, trustState: resolvedTrustState)
     }
 
     private var savedItemsBaseDirectoryURL: URL {
-        let trimmedPath = savedItemsBaseDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedPath = trimmedPath.isEmpty ? Self.defaultSavedItemsBaseDirectory.path : trimmedPath
-        return URL(fileURLWithPath: resolvedPath, isDirectory: true)
-    }
-
-    private static var defaultSavedItemsBaseDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("AirCopy", isDirectory: true)
+        ReceivedItemDiskStore.baseDirectoryURL(for: savedItemsBaseDirectoryPath)
     }
 
     private func saveReceivedPayloadToDiskIfNeeded(_ payload: ClipboardPayload, date: Date) -> SaveReceivedPayloadResult {
-        guard saveReceivedItemsToDiskEnabled else { return .skipped }
-
-        do {
-            switch payload.kind {
-            case .image:
-                guard saveReceivedImagesToDisk, let imageData = payload.imageData else { return .skipped }
-                let folder = try subdirectoryURL(named: "Images")
-                let stem = fileStem(from: payload.title, fallback: "Image-\(timestampString(from: date))")
-                let destination = uniqueFileURL(in: folder, preferredStem: stem, pathExtension: "png")
-                try imageData.write(to: destination, options: .atomic)
-                return .saved("Saved to Images.")
-
-            case .text, .code, .link, .browserTab:
-                guard saveReceivedTextToDisk else { return .skipped }
-                let contents = payload.plainTextRepresentation
-                guard let data = contents.data(using: .utf8), !data.isEmpty else { return .skipped }
-                let folder = try subdirectoryURL(named: "Text")
-                let stem = fileStem(from: payload.title, fallback: "Text-\(timestampString(from: date))")
-                let destination = uniqueFileURL(
-                    in: folder,
-                    preferredStem: stem,
-                    pathExtension: textFileExtension(for: payload)
-                )
-                try data.write(to: destination, options: .atomic)
-                return .saved("Saved to Text.")
-
-            case .file, .folder:
-                guard saveReceivedFilesToDisk else { return .skipped }
-                guard let summary = try saveAttachmentsToDisk(payload.attachments) else {
-                    return .skipped
-                }
-                return .saved(summary)
-            }
-        } catch {
-            return .failed("Could not save a copy: \(error.localizedDescription)")
-        }
-    }
-
-    private func saveAttachmentsToDisk(_ attachments: [ClipboardAttachment]) throws -> String? {
-        guard !attachments.isEmpty else { return nil }
-
-        let folder = try subdirectoryURL(named: "Files")
-        var savedCount = 0
-        var skippedCount = 0
-
-        for attachment in attachments {
-            if try saveAttachment(attachment, to: folder) {
-                savedCount += 1
-            } else {
-                skippedCount += 1
-            }
-        }
-
-        if savedCount == 0, skippedCount > 0 {
-            return "Some file references could not be saved."
-        }
-
-        if skippedCount > 0 {
-            return "Saved \(savedCount) file\(savedCount == 1 ? "" : "s"). Some references were skipped."
-        }
-
-        return savedCount == 1 ? "Saved to Files." : "Saved \(savedCount) files to Files."
-    }
-
-    private func saveAttachment(_ attachment: ClipboardAttachment, to folder: URL) throws -> Bool {
-        if let inlineData = attachment.inlineData, !attachment.isDirectory {
-            let destination = uniqueFileURL(
-                in: folder,
-                preferredStem: attachmentFileStem(for: attachment),
-                pathExtension: fileExtension(for: attachment)
+        ReceivedItemDiskStore.save(
+            payload: payload,
+            date: date,
+            settings: ReceivedItemDiskSettings(
+                baseDirectoryPath: savedItemsBaseDirectoryPath,
+                saveItems: saveReceivedItemsToDiskEnabled,
+                saveImages: saveReceivedImagesToDisk,
+                saveText: saveReceivedTextToDisk,
+                saveFiles: saveReceivedFilesToDisk
             )
-            try inlineData.write(to: destination, options: .atomic)
-            return true
-        }
-
-        let sourceURL = URL(fileURLWithPath: attachment.originalPath)
-        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-            return false
-        }
-
-        let destination = uniqueFileURL(
-            in: folder,
-            preferredStem: attachment.isDirectory
-                ? attachmentDirectoryStem(for: attachment)
-                : attachmentFileStem(for: attachment),
-            pathExtension: attachment.isDirectory ? nil : fileExtension(for: attachment)
         )
-        try FileManager.default.copyItem(at: sourceURL, to: destination)
-        return true
-    }
-
-    private func subdirectoryURL(named folderName: String) throws -> URL {
-        let directory = savedItemsBaseDirectoryURL.appendingPathComponent(folderName, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
-    }
-
-    private func uniqueFileURL(in directory: URL, preferredStem: String, pathExtension: String?) -> URL {
-        let stem = preferredStem.isEmpty ? "AirCopy" : preferredStem
-        let sanitizedExtension = (pathExtension ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-
-        var candidate = directory.appendingPathComponent(stem)
-        if !sanitizedExtension.isEmpty {
-            candidate.appendPathExtension(sanitizedExtension)
-        }
-
-        guard !FileManager.default.fileExists(atPath: candidate.path) else {
-            var suffix = 2
-            while true {
-                var numbered = directory.appendingPathComponent("\(stem)-\(suffix)")
-                if !sanitizedExtension.isEmpty {
-                    numbered.appendPathExtension(sanitizedExtension)
-                }
-
-                if !FileManager.default.fileExists(atPath: numbered.path) {
-                    return numbered
-                }
-
-                suffix += 1
-            }
-        }
-
-        return candidate
-    }
-
-    private func fileStem(from rawValue: String, fallback: String) -> String {
-        let cleaned = rawValue
-            .components(separatedBy: CharacterSet(charactersIn: "/:\\?%*|\"<>"))
-            .joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let base = cleaned.isEmpty ? fallback : cleaned
-        return String(base.prefix(60))
-    }
-
-    private func fileExtension(for attachment: ClipboardAttachment) -> String? {
-        if !attachment.fileExtension.isEmpty {
-            return attachment.fileExtension
-        }
-
-        if let typeIdentifier = attachment.typeIdentifier,
-           let contentType = UTType(typeIdentifier),
-           let preferredExtension = contentType.preferredFilenameExtension {
-            return preferredExtension
-        }
-
-        return nil
-    }
-
-    private func attachmentFileStem(for attachment: ClipboardAttachment) -> String {
-        let rawName = URL(fileURLWithPath: attachment.name).deletingPathExtension().lastPathComponent
-        return fileStem(from: rawName, fallback: "File")
-    }
-
-    private func attachmentDirectoryStem(for attachment: ClipboardAttachment) -> String {
-        fileStem(from: attachment.name, fallback: "Folder")
-    }
-
-    private func textFileExtension(for payload: ClipboardPayload) -> String {
-        guard payload.kind == .code else { return "txt" }
-
-        switch payload.languageHint?.lowercased() {
-        case "swift":
-            return "swift"
-        case "javascript":
-            return "js"
-        case "html":
-            return "html"
-        case "css":
-            return "css"
-        case "sql":
-            return "sql"
-        case "json":
-            return "json"
-        case "bash":
-            return "sh"
-        default:
-            return "txt"
-        }
-    }
-
-    private func timestampString(from date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
-        return formatter.string(from: date)
-    }
-
-    private func screenshotCandidateFiles(in folderURL: URL) -> [URL]? {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: folderURL,
-            includingPropertiesForKeys: [
-                .isRegularFileKey,
-                .contentTypeKey,
-                .contentModificationDateKey,
-                .creationDateKey
-            ],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-
-        return urls.filter { url in
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey]),
-                  values.isRegularFile == true else {
-                return false
-            }
-
-            let contentTypeIsImage = values.contentType?.conforms(to: .image) == true
-            let extensionIsImage = Self.imageFileExtensions.contains(url.pathExtension.lowercased())
-            guard contentTypeIsImage || extensionIsImage else { return false }
-            return Self.looksLikeScreenshotFilename(url.lastPathComponent)
-        }
-    }
-
-    private func screenshotTimestamp(for fileURL: URL) -> Date {
-        let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
-        return values?.contentModificationDate ?? values?.creationDate ?? .distantPast
-    }
-
-    private func fileSignature(for fileURL: URL) -> String {
-        let timestamp = screenshotTimestamp(for: fileURL)
-        return "\(fileURL.path)#\(timestamp.timeIntervalSince1970)"
-    }
-
-    private static func looksLikeScreenshotFilename(_ filename: String) -> Bool {
-        let normalized = filename
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
-
-        let markers = [
-            "screenshot",
-            "screen shot",
-            "screen-shot",
-            "screen_shot",
-            "screencapture",
-            "screen capture",
-            "captura de pantalla",
-            "captura de tela",
-            "capture d'ecran",
-            "capture decran"
-        ]
-
-        return markers.contains { normalized.contains($0) }
-    }
-
-    private nonisolated static func canonicalInstalledAppURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Applications", isDirectory: true)
-            .appendingPathComponent("AirCopy.app", isDirectory: true)
     }
 
     private func shouldSuppressSync(for payload: ClipboardPayload) -> Bool {
-        guard let bundleID = payload.sourceAppBundleID else { return false }
-
-        let lowercasedBundleID = bundleID.lowercased()
-        if protectedPasswordManagerBundleIDs.contains(lowercasedBundleID) || lowercasedBundleID.contains("1password") || lowercasedBundleID.contains("bitwarden") {
-            statusText = "Skipped clipboard from \(payload.sourceAppName ?? bundleID)."
-            return true
-        }
-
-        if let name = excludedAppMap[bundleID] {
-            statusText = "Skipped clipboard from excluded app \(name)."
+        if let message = ClipboardPrivacyRules.outgoingSuppressionMessage(
+            for: payload,
+            blockPasswordManagerClips: blockPasswordManagerClips,
+            excludedAppMap: excludedAppMap
+        ) {
+            statusText = message
             return true
         }
 
         return false
+    }
+
+    private func shouldSuppressIncomingClipboard(_ payload: ClipboardPayload, senderName: String) -> Bool {
+        guard let message = ClipboardPrivacyRules.incomingSuppressionMessage(
+            for: payload,
+            senderName: senderName,
+            blockPasswordManagerClips: blockPasswordManagerClips,
+            applyAppPoliciesToIncomingItems: applyAppPoliciesToIncomingItems,
+            excludedAppMap: excludedAppMap
+        ) else { return false }
+
+        statusText = message
+        return true
+    }
+
+    private func guardSensitivePayload(_ payload: ClipboardPayload, action: SensitiveContentAction) -> Bool {
+        switch ClipboardPrivacyRules.sensitiveContentResult(
+            for: payload,
+            action: action,
+            existingApproval: sensitiveContentApproval
+        ) {
+        case .allowed(let clearApproval):
+            if clearApproval {
+                sensitiveContentApproval = nil
+            }
+            return true
+        case .blocked(let message):
+            statusText = message
+            return false
+        case .needsConfirmation(let message, let approval):
+            sensitiveContentApproval = approval
+            statusText = message
+            return false
+        }
     }
 
     private func persistExcludedApplications() {
@@ -2535,11 +1829,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         excludedApplications = excludedAppMap
             .map { AppExclusion(bundleID: $0.key, appName: $0.value) }
             .sorted { $0.appName.localizedCaseInsensitiveCompare($1.appName) == .orderedAscending }
-    }
-
-    private func persistScreenshotStyleSettings() {
-        guard let data = try? JSONEncoder().encode(screenshotStyleSettings) else { return }
-        UserDefaults.standard.set(data, forKey: Self.screenshotStyleSettingsKey)
     }
 
     private func saveStringSet(_ set: Set<String>, key: String) {
@@ -2560,15 +1849,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         return map
     }
 
-    private static func loadScreenshotStyleSettings(forKey key: String) -> ScreenshotStyleSettings {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let settings = try? JSONDecoder().decode(ScreenshotStyleSettings.self, from: data) else {
-            return ScreenshotStyleSettings()
-        }
-
-        return settings
-    }
-
     private static func loadOrCreateDeviceID() -> String {
         let defaults = UserDefaults.standard
         let key = "device-id"
@@ -2580,276 +1860,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let newID = UUID().uuidString.lowercased()
         defaults.set(newID, forKey: key)
         return newID
-    }
-
-    private static func frontmostApplicationInfo() -> (bundleID: String?, name: String?) {
-        let application = NSWorkspace.shared.frontmostApplication
-        return (application?.bundleIdentifier, application?.localizedName)
-    }
-
-    private static func isAccessibilityTrusted(prompt: Bool = false) -> Bool {
-        if prompt {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            return AXIsProcessTrustedWithOptions(options)
-        }
-
-        return AXIsProcessTrusted()
-    }
-
-    private static func readClipboardPayload(
-        from pasteboard: NSPasteboard,
-        maxInlineAttachmentBytes: Int64,
-        sourceAppBundleID: String?,
-        sourceAppName: String?
-    ) -> ClipboardPayload? {
-        if let imagePayload = imagePayload(
-            from: pasteboard,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        ) {
-            return imagePayload
-        }
-
-        if let attachmentPayload = attachmentPayload(
-            from: pasteboard,
-            maxInlineAttachmentBytes: maxInlineAttachmentBytes,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        ) {
-            return attachmentPayload
-        }
-
-        if let urlPayload = urlPayload(
-            from: pasteboard,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        ) {
-            return urlPayload
-        }
-
-        guard let text = pasteboard.string(forType: .string) else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        if looksLikeURL(trimmed) {
-            return ClipboardPayload(
-                urlString: trimmed,
-                sourceAppBundleID: sourceAppBundleID,
-                sourceAppName: sourceAppName
-            )
-        }
-
-        if let language = detectCodeLanguage(in: text) {
-            return ClipboardPayload(
-                code: text,
-                languageHint: language,
-                sourceAppBundleID: sourceAppBundleID,
-                sourceAppName: sourceAppName
-            )
-        }
-
-        return ClipboardPayload(
-            text: text,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        )
-    }
-
-    private static func imagePayload(
-        from pasteboard: NSPasteboard,
-        sourceAppBundleID: String?,
-        sourceAppName: String?
-    ) -> ClipboardPayload? {
-        guard containsDirectImagePayload(in: pasteboard),
-              let imageData = pngData(from: pasteboard),
-              !imageData.isEmpty else {
-            return nil
-        }
-
-        return ClipboardPayload(
-            imageData: imageData,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        )
-    }
-
-    private static func containsDirectImagePayload(in pasteboard: NSPasteboard) -> Bool {
-        if let types = pasteboard.types,
-           types.contains(where: { $0 == .png || $0 == .tiff }) {
-            return true
-        }
-
-        if let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage],
-           !images.isEmpty {
-            return true
-        }
-
-        return false
-    }
-
-    private static func attachmentPayload(
-        from pasteboard: NSPasteboard,
-        maxInlineAttachmentBytes: Int64,
-        sourceAppBundleID: String?,
-        sourceAppName: String?
-    ) -> ClipboardPayload? {
-        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] else { return nil }
-        let fileURLs = urls.filter(\.isFileURL)
-        guard !fileURLs.isEmpty else { return nil }
-
-        let attachments = fileURLs.compactMap { fileURL -> ClipboardAttachment? in
-            do {
-                let values = try fileURL.resourceValues(forKeys: [
-                    .isDirectoryKey,
-                    .fileSizeKey,
-                    .nameKey,
-                    .contentTypeKey
-                ])
-
-                let isDirectory = values.isDirectory ?? false
-                let fileSize = values.fileSize.map(Int64.init)
-                let inlineData: Data?
-
-                if !isDirectory, let fileSize, fileSize <= maxInlineAttachmentBytes {
-                    inlineData = try? Data(contentsOf: fileURL)
-                } else {
-                    inlineData = nil
-                }
-
-                return ClipboardAttachment(
-                    name: values.name ?? fileURL.lastPathComponent,
-                    originalPath: fileURL.path,
-                    isDirectory: isDirectory,
-                    byteCount: fileSize,
-                    typeIdentifier: values.contentType?.identifier,
-                    inlineData: inlineData
-                )
-            } catch {
-                return ClipboardAttachment(
-                    name: fileURL.lastPathComponent,
-                    originalPath: fileURL.path,
-                    isDirectory: false
-                )
-            }
-        }
-
-        guard !attachments.isEmpty else { return nil }
-        return ClipboardPayload(
-            attachments: attachments,
-            sourceAppBundleID: sourceAppBundleID,
-            sourceAppName: sourceAppName
-        )
-    }
-
-    private static func urlPayload(
-        from pasteboard: NSPasteboard,
-        sourceAppBundleID: String?,
-        sourceAppName: String?
-    ) -> ClipboardPayload? {
-        let urlNameType = NSPasteboard.PasteboardType("public.url-name")
-
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-           let url = urls.first(where: { !$0.isFileURL }) {
-            let linkTitle = pasteboard.string(forType: urlNameType)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let browserTab = (linkTitle?.isEmpty == false) && linkTitle != url.absoluteString
-            return ClipboardPayload(
-                urlString: url.absoluteString,
-                linkTitle: linkTitle,
-                browserTab: browserTab,
-                sourceAppBundleID: sourceAppBundleID,
-                sourceAppName: sourceAppName
-            )
-        }
-
-        return nil
-    }
-
-    private static func looksLikeURL(_ text: String) -> Bool {
-        guard let url = URL(string: text) else { return false }
-        return url.scheme?.hasPrefix("http") == true && url.host(percentEncoded: false) != nil
-    }
-
-    private static func detectCodeLanguage(in text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lineCount = trimmed.split(separator: "\n", omittingEmptySubsequences: false).count
-
-        if let data = trimmed.data(using: .utf8),
-           (trimmed.hasPrefix("{") || trimmed.hasPrefix("[")),
-           (try? JSONSerialization.jsonObject(with: data)) != nil {
-            return "json"
-        }
-
-        guard lineCount > 1 || trimmed.contains("{") || trimmed.contains(";") else { return nil }
-
-        let lowercased = trimmed.lowercased()
-
-        if lowercased.contains("import swiftui") || lowercased.contains("func ") || lowercased.contains("struct ") {
-            return "swift"
-        }
-
-        if lowercased.contains("const ") || lowercased.contains("function ") || lowercased.contains("=>") {
-            return "javascript"
-        }
-
-        if lowercased.hasPrefix("#!/bin/") || lowercased.contains("echo ") || lowercased.contains("export ") {
-            return "bash"
-        }
-
-        if lowercased.contains("<html") || lowercased.contains("<div") || lowercased.contains("</") {
-            return "html"
-        }
-
-        if lowercased.contains("{") && lowercased.contains(":") && lowercased.contains(";") {
-            return "css"
-        }
-
-        if lowercased.contains("select ") || lowercased.contains(" from ") {
-            return "sql"
-        }
-
-        if lineCount > 1 && (trimmed.contains("{") || trimmed.contains("}") || trimmed.contains("let ") || trimmed.contains("=")) {
-            return "code"
-        }
-
-        return nil
-    }
-
-    private static func pngData(from pasteboard: NSPasteboard) -> Data? {
-        if let pngData = pasteboard.data(forType: .png) {
-            return pngData
-        }
-
-        if let tiffData = pasteboard.data(forType: .tiff),
-           let image = NSImage(data: tiffData) {
-            return pngData(from: image)
-        }
-
-        if let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage],
-           let image = images.first {
-            return pngData(from: image)
-        }
-
-        return nil
-    }
-
-    private static func pngData(from image: NSImage) -> Data? {
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData) else {
-            return nil
-        }
-
-        return bitmap.representation(using: .png, properties: [:])
-    }
-
-    private func temporaryFileURL(for filename: String, data: Data) throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("aircopy-staging", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let safeName = filename.isEmpty ? UUID().uuidString : filename
-        let url = directory.appendingPathComponent("\(UUID().uuidString)-\(safeName)")
-        try data.write(to: url, options: .atomic)
-        return url
     }
 
     private static func sanitizedPeerName(from rawName: String) -> String {
@@ -2901,6 +1911,11 @@ extension AirCopyCoordinator: MCNearbyServiceAdvertiserDelegate {
                 return
             }
 
+            if contextValue?.deviceID == self.deviceID {
+                handlerBox.handler(false, nil)
+                return
+            }
+
             let resolvedID = self.upsertPeer(
                 displayName: peerName,
                 deviceID: contextValue?.deviceID,
@@ -2909,6 +1924,7 @@ extension AirCopyCoordinator: MCNearbyServiceAdvertiserDelegate {
             )
 
             self.peerIDByDeviceID[resolvedID] = peerBox.peerID
+            self.deviceIDByPeerID[peerBox.peerID] = resolvedID
             let trustState = self.trustState(for: resolvedID)
 
             guard trustState == .trusted else {
@@ -2919,7 +1935,21 @@ extension AirCopyCoordinator: MCNearbyServiceAdvertiserDelegate {
                 return
             }
 
+            guard !self.shouldInitiateConnection(to: resolvedID) else {
+                self.statusText = "Found \(peerName). Connecting..."
+                handlerBox.handler(false, nil)
+                self.inviteIfPossible(deviceID: resolvedID)
+                return
+            }
+
+            guard !self.connectedDeviceIDs.contains(resolvedID),
+                  !self.hasPendingConnection(to: resolvedID) else {
+                handlerBox.handler(false, nil)
+                return
+            }
+
             self.statusText = "Connecting to \(peerName)..."
+            self.markConnectionPending(to: resolvedID)
             handlerBox.handler(true, self.session)
         }
     }
@@ -2946,7 +1976,11 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard peerName != self.peerID.displayName else { return }
+            if let discoveredDeviceID {
+                guard discoveredDeviceID != self.deviceID else { return }
+            } else {
+                guard peerName != self.peerID.displayName else { return }
+            }
             self.noteConnectivityEvent()
 
             let resolvedID = self.upsertPeer(
@@ -2956,6 +1990,7 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
                 connected: false
             )
             self.peerIDByDeviceID[resolvedID] = peerBox.peerID
+            self.deviceIDByPeerID[peerBox.peerID] = resolvedID
             self.cancelLostPeerGrace(for: resolvedID)
 
             guard self.trustState(for: resolvedID) == .trusted else {
@@ -2963,19 +1998,24 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
                 return
             }
 
-            self.statusText = "Found \(peerName). Connecting..."
-            self.inviteIfPossible(deviceID: resolvedID)
+            if self.shouldInitiateConnection(to: resolvedID) {
+                self.statusText = "Found \(peerName). Connecting..."
+                self.inviteIfPossible(deviceID: resolvedID)
+            } else {
+                self.statusText = "Found \(peerName). Waiting for their connection..."
+            }
         }
     }
 
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
+        let peerBox = PeerIDBox(peerID)
         let peerName = peerID.displayName
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.noteConnectivityEvent()
 
-            let resolvedID = self.peerDisplayNameToDeviceID[peerName] ?? peerName
+            let resolvedID = self.resolvedDeviceID(for: peerBox.peerID)
             guard !self.connectedDeviceIDs.contains(resolvedID) else {
                 return
             }
@@ -2992,24 +2032,27 @@ extension AirCopyCoordinator: MCNearbyServiceBrowserDelegate {
 
 extension AirCopyCoordinator: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        let peerBox = PeerIDBox(peerID)
         let peerName = peerID.displayName
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.noteConnectivityEvent()
 
-            let resolvedID = self.peerDisplayNameToDeviceID[peerName] ?? peerName
+            let resolvedID = self.resolvedDeviceID(for: peerBox.peerID)
             let trustState = self.trustState(for: resolvedID)
+            self.deviceIDByPeerID[peerBox.peerID] = resolvedID
 
             _ = self.upsertPeer(
                 displayName: peerName,
-                deviceID: self.peerDisplayNameToDeviceID[peerName],
+                deviceID: resolvedID == peerName ? self.peerDisplayNameToDeviceID[peerName] : resolvedID,
                 discovered: state != .notConnected,
                 connected: state == .connected
             )
 
             switch state {
             case .connected:
+                self.clearPendingConnection(to: resolvedID)
                 self.cancelLostPeerGrace(for: resolvedID)
                 self.lastInviteAttemptByDeviceID[resolvedID] = nil
                 self.statusText = "Connected to \(peerName)."
@@ -3018,12 +2061,15 @@ extension AirCopyCoordinator: MCSessionDelegate {
                    self.isAutoSyncEnabled(for: resolvedID),
                    let payload = self.lastKnownPayload,
                    self.syncEnabled {
+                    guard self.guardSensitivePayload(payload, action: .automaticSync) else { return }
                     self.sendPayload(payload, toDeviceIDs: [resolvedID], historyItemID: self.latestClipboardItem?.id)
                 }
             case .connecting:
+                self.markConnectionPending(to: resolvedID)
                 self.cancelLostPeerGrace(for: resolvedID)
                 self.statusText = "Connecting to \(peerName)..."
             case .notConnected:
+                self.clearPendingConnection(to: resolvedID)
                 self.updatePeer(deviceID: resolvedID) { peer in
                     peer.isConnected = false
                 }
