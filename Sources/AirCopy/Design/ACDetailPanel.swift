@@ -73,16 +73,17 @@ struct ACDetailPanel: View {
                 }
                 .frame(maxHeight: 210)
             case .image:
-                Group {
-                    if let thumbnail {
-                        Image(nsImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        LinearGradient(colors: [Color(hex: 0x2A3380), Color(hex: 0x6A3FB0)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Color.clear
+                    .frame(height: 188)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
+                        if let thumbnail {
+                            Image(nsImage: thumbnail).resizable().scaledToFill()
+                        } else {
+                            LinearGradient(colors: [Color(hex: 0x2A3380), Color(hex: 0x6A3FB0)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        }
                     }
-                }
-                .frame(height: 188)
-                .frame(maxWidth: .infinity)
-                .clipped()
+                    .clipped()
             case .link:
                 VStack(alignment: .leading, spacing: 12) {
                     Text(item.faviconLetter)

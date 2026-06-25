@@ -64,20 +64,22 @@ struct ACClipCard: View {
 
     private var imageBody: some View {
         ZStack(alignment: .bottomLeading) {
-            Group {
-                if let thumbnail {
-                    Image(nsImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    LinearGradient(
-                        colors: [Color(hex: 0x2A3380), Color(hex: 0x6A3FB0)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
+            // Color.clear takes exactly the available cell space; the image is an
+            // overlay so its (possibly huge) size can't expand the card's layout.
+            Color.clear
+                .overlay {
+                    if let thumbnail {
+                        Image(nsImage: thumbnail)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        LinearGradient(
+                            colors: [Color(hex: 0x2A3380), Color(hex: 0x6A3FB0)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
+                .clipped()
 
             // filename bar
             HStack(spacing: 6) {
