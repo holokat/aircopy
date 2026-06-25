@@ -17,7 +17,7 @@ struct AirCopyApp: App {
                 .environmentObject(settingsStore)
                 .environmentObject(toastCenter)
                 .preferredColorScheme(.light)
-                .frame(minWidth: 1040, minHeight: 720)
+                .frame(minWidth: 1100, idealWidth: 1240, maxWidth: .infinity, minHeight: 760, idealHeight: 858, maxHeight: .infinity)
                 .background(
                     StatusItemInstallerView()
                         .environmentObject(coordinator)
@@ -42,7 +42,8 @@ struct AirCopyApp: App {
                 }
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowResizability(.automatic)
+        .defaultSize(width: 1240, height: 858)
     }
 }
 

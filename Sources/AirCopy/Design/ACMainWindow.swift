@@ -28,7 +28,7 @@ struct ACMainWindow: View {
 
             ACToastOverlay(toast: toast)
         }
-        .frame(minWidth: 1040, minHeight: 720)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onExitCommand {
             if sortOpen { sortOpen = false }
             else if selectedID != nil { selectedID = nil }
