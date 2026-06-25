@@ -29,6 +29,9 @@ struct ACMainWindow: View {
             ACToastOverlay(toast: toast)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Pin the titlebar flush to the window top; the hidden native title bar
+        // can otherwise leave a top safe-area inset (empty gap above the row).
+        .ignoresSafeArea(.container, edges: .top)
         .background(TitlebarConfigurator())
         .onExitCommand {
             if sortOpen { sortOpen = false }
