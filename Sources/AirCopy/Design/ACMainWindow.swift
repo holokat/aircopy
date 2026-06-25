@@ -29,6 +29,7 @@ struct ACMainWindow: View {
             ACToastOverlay(toast: toast)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(TitlebarConfigurator())
         .onExitCommand {
             if sortOpen { sortOpen = false }
             else if selectedID != nil { selectedID = nil }
@@ -52,8 +53,9 @@ struct ACMainWindow: View {
 
     private var titlebar: some View {
         HStack(spacing: 9) {
-            // Leave room for the native traffic lights (hidden title bar).
-            Color.clear.frame(width: 64, height: 1)
+            MacTrafficLights()
+                .padding(.leading, 4)
+                .padding(.trailing, 12)
 
             ACLogoTile(size: 24, corner: 7, glyph: 14)
             Text("AirCopy")
