@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-struct ClipboardHistoryItem: Identifiable, Hashable {
+struct ClipboardHistoryItem: Identifiable, Hashable, Codable {
     let id: UUID
     let fingerprint: String
     let payload: ClipboardPayload

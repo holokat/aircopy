@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
+import IOKit.ps
 import MultipeerConnectivity
 import SwiftUI
 import UniformTypeIdentifiers
@@ -143,6 +144,39 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published var soundEnabled: Bool = UserDefaults.standard.object(forKey: AirCopyCoordinator.soundEnabledKey) as? Bool ?? false {
         didSet { UserDefaults.standard.set(soundEnabled, forKey: Self.soundEnabledKey) }
     }
+    private static let maxImageBytesKey = "ac.settings.maxImageBytes"
+    private static let clearOnQuitKey = "ac.settings.clearHistoryOnQuit"
+    private static let pauseOnBatteryKey = "ac.settings.pauseOnBattery"
+    private static let autoSyncNewDevicesKey = "ac.settings.autoSyncNewDevices"
+
+    /// Largest image clip (in bytes) that will be synced. 0 == unlimited.
+    @Published var maxImageBytes: Int = (UserDefaults.standard.object(forKey: AirCopyCoordinator.maxImageBytesKey) as? Int) ?? (25 * 1024 * 1024) {
+        didSet { UserDefaults.standard.set(maxImageBytes, forKey: Self.maxImageBytesKey) }
+    }
+    /// Forget clipboard history when AirCopy quits.
+    @Published var clearHistoryOnQuit: Bool = UserDefaults.standard.bool(forKey: AirCopyCoordinator.clearOnQuitKey) {
+        didSet { UserDefaults.standard.set(clearHistoryOnQuit, forKey: Self.clearOnQuitKey) }
+    }
+    /// Pause syncing while running on battery power.
+    @Published var pauseOnBattery: Bool = UserDefaults.standard.bool(forKey: AirCopyCoordinator.pauseOnBatteryKey) {
+        didSet {
+            UserDefaults.standard.set(pauseOnBattery, forKey: Self.pauseOnBatteryKey)
+            updatePowerMonitoring()
+        }
+    }
+    /// Default a newly trusted Mac to auto-sync (vs. requiring you to enable it).
+    @Published var autoSyncNewDevices: Bool = (UserDefaults.standard.object(forKey: AirCopyCoordinator.autoSyncNewDevicesKey) as? Bool) ?? true {
+        didSet { UserDefaults.standard.set(autoSyncNewDevices, forKey: Self.autoSyncNewDevicesKey) }
+    }
+    /// True while syncing is suspended because the Mac is on battery.
+    @Published private(set) var isPausedForBattery = false
+    /// Result string from the most recent "Check for updates".
+    @Published var updateCheckStatus: String?
+
+    private var powerRunLoopSource: CFRunLoopSource?
+    private var historyPersistTask: Task<Void, Never>?
+    private let hotkeyManager = GlobalHotkeyManager()
+    @Published private(set) var hotkeyBindings: [String: HotkeyBinding] = [:]
     private var maxHistoryItems: Int { historyLimit }
     private let maxInlineAttachmentBytes: Int64 = 8 * 1024 * 1024
     private let inviteRetryInterval: TimeInterval = 3
@@ -254,6 +288,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
         self.session.delegate = self
         updateEffectiveColorScheme()
+        loadPersistedHistory()
 
         if let temporarySyncUntil, temporarySyncUntil <= Date() {
             self.temporarySyncUntil = nil
@@ -271,6 +306,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         startAppearanceMonitor()
         registerConnectivityObservers()
+        updatePowerMonitoring()
+        setupHotkeys()
         statusText = "Checking subscription..."
     }
 
@@ -301,6 +338,14 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         clearCopiedStateTask?.cancel()
         clearCopiedStateTask = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        stopPowerMonitoring()
+        hotkeyManager.unregisterAll()
+        historyPersistTask?.cancel()
+        if clearHistoryOnQuit {
+            deletePersistedHistory()
+        } else {
+            writeHistory(clipboardHistory)
+        }
         stopServices()
         session = nil
     }
@@ -533,6 +578,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     func clearHistory() {
         clipboardHistory.removeAll()
+        deletePersistedHistory()
         statusText = "Local history cleared."
     }
 
@@ -559,6 +605,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         favoriteFingerprints.remove(removed.fingerprint)
         saveStringSet(pinnedFingerprints, key: Self.pinnedFingerprintsKey)
         saveStringSet(favoriteFingerprints, key: Self.favoriteFingerprintsKey)
+        scheduleHistoryPersist()
         statusText = "Clip deleted."
     }
 
@@ -665,8 +712,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     func trustPeer(_ deviceID: String) {
         deviceTrustStore.trust(deviceID)
+        deviceTrustStore.setAutoSyncEnabled(autoSyncNewDevices, for: deviceID)
         updateTrustState(for: deviceID, to: .trusted)
+        updatePeer(deviceID: deviceID) { $0.isAutoSyncEnabled = autoSyncNewDevices }
         inviteIfPossible(deviceID: deviceID)
+        refreshPeerDevices()
         statusText = "Trusted \(peerStateByID[deviceID]?.displayName ?? "device")."
     }
 
@@ -1268,6 +1318,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         pendingRemotePayload = message.payload
         lastKnownPayload = message.payload
         writePayloadToPasteboard(message.payload)
+        playSelectionSound()
         _ = recordHistory(
             payload: message.payload,
             source: "Received from \(message.senderName)",
@@ -1456,6 +1507,46 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let retainedFingerprints = ClipboardHistoryStore.sortAndTrim(&clipboardHistory, maxItems: maxHistoryItems)
         imageThumbnailByFingerprint = imageThumbnailByFingerprint.filter { retainedFingerprints.contains($0.key) }
         thumbnailTasksByFingerprint = thumbnailTasksByFingerprint.filter { retainedFingerprints.contains($0.key) }
+        scheduleHistoryPersist()
+    }
+
+    // MARK: - History persistence
+
+    private static var historyFileURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("AirCopy", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("history.json")
+    }
+
+    private func loadPersistedHistory() {
+        guard let data = try? Data(contentsOf: Self.historyFileURL),
+              let items = try? JSONDecoder().decode([ClipboardHistoryItem].self, from: data) else { return }
+        clipboardHistory = items
+        pinnedFingerprints = Set(items.filter(\.isPinned).map(\.fingerprint))
+        favoriteFingerprints = Set(items.filter(\.isFavorite).map(\.fingerprint))
+        sortAndTrimHistory()
+    }
+
+    private func scheduleHistoryPersist() {
+        historyPersistTask?.cancel()
+        let snapshot = clipboardHistory
+        historyPersistTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.writeHistory(snapshot)
+        }
+    }
+
+    private func writeHistory(_ items: [ClipboardHistoryItem]) {
+        guard let data = try? JSONEncoder().encode(items) else { return }
+        try? data.write(to: Self.historyFileURL, options: .atomic)
+    }
+
+    private func deletePersistedHistory() {
+        historyPersistTask?.cancel()
+        try? FileManager.default.removeItem(at: Self.historyFileURL)
     }
 
     private func pruneThumbnailStateToCurrentHistory() {
@@ -1784,10 +1875,185 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             return true
         }
 
+        if isImageOverLimit(payload) {
+            statusText = "Image is larger than the sync limit. Skipped."
+            return true
+        }
+
         return false
     }
 
+    /// True when the clip is an image bigger than the configured max image size.
+    private func isImageOverLimit(_ payload: ClipboardPayload) -> Bool {
+        guard maxImageBytes > 0 else { return false }
+        guard payload.kind == .image, let bytes = payload.imageData?.count else { return false }
+        return bytes > maxImageBytes
+    }
+
+    // MARK: - Power monitoring (Pause on battery)
+
+    private func updatePowerMonitoring() {
+        if pauseOnBattery {
+            if powerRunLoopSource == nil {
+                let context = Unmanaged.passUnretained(self).toOpaque()
+                if let source = IOPSNotificationCreateRunLoopSource({ ctx in
+                    guard let ctx else { return }
+                    let coordinator = Unmanaged<AirCopyCoordinator>.fromOpaque(ctx).takeUnretainedValue()
+                    Task { @MainActor in coordinator.recomputeBatteryPause() }
+                }, context)?.takeRetainedValue() {
+                    CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+                    powerRunLoopSource = source
+                }
+            }
+            recomputeBatteryPause()
+        } else {
+            stopPowerMonitoring()
+            if isPausedForBattery {
+                isPausedForBattery = false
+                resumeFromBatteryPause()
+            }
+        }
+    }
+
+    private func stopPowerMonitoring() {
+        if let source = powerRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode)
+            powerRunLoopSource = nil
+        }
+    }
+
+    private func isRunningOnBattery() -> Bool {
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else {
+            return false
+        }
+        for source in list {
+            guard let desc = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any],
+                  let state = desc[kIOPSPowerSourceStateKey] as? String else { continue }
+            if state == kIOPSBatteryPowerValue { return true }
+        }
+        return false
+    }
+
+    private func recomputeBatteryPause() {
+        let shouldPause = pauseOnBattery && isRunningOnBattery()
+        guard shouldPause != isPausedForBattery else { return }
+        isPausedForBattery = shouldPause
+        if shouldPause {
+            statusText = "Syncing paused — running on battery."
+            stopServices()
+        } else {
+            resumeFromBatteryPause()
+        }
+    }
+
+    private func resumeFromBatteryPause() {
+        statusText = "Syncing resumed."
+        if syncEnabled && hasSubscriptionAccess { startServices() }
+    }
+
+    // MARK: - Global hotkeys
+
+    private func setupHotkeys() {
+        for (id, def) in HotkeyBinding.defaultBindings() {
+            let binding = hotkeyManager.savedBinding(id: id, default: def)
+            hotkeyBindings[id] = binding
+            registerHotkey(id: id, binding: binding)
+        }
+    }
+
+    private func registerHotkey(id: String, binding: HotkeyBinding) {
+        hotkeyManager.register(id: id, binding: binding) { [weak self] in
+            guard let self else { return }
+            switch id {
+            case "open": self.showMainWindow()
+            case "copySync": self.sendCurrentClipboardToAllDevices()
+            case "pasteLast": self.pasteLatestClip()
+            default: break
+            }
+        }
+    }
+
+    func setHotkey(_ id: String, _ binding: HotkeyBinding) {
+        hotkeyBindings[id] = binding
+        hotkeyManager.saveBinding(id: id, binding)
+        registerHotkey(id: id, binding: binding)
+        statusText = "Shortcut updated."
+    }
+
+    func resetHotkeys() {
+        for (id, def) in HotkeyBinding.defaultBindings() { setHotkey(id, def) }
+    }
+
+    // MARK: - Hotkey actions
+
+    func sendCurrentClipboardToAllDevices() {
+        guard requireSubscriptionAccess() else { return }
+        let targets = autoSyncPeers.map(\.id)
+        guard !targets.isEmpty else { statusText = "No synced Macs to send to."; return }
+        for id in targets { sendCurrentClipboard(to: id) }
+    }
+
+    func pasteLatestClip() {
+        guard requireSubscriptionAccess() else { return }
+        guard let item = latestClipboardItem else { statusText = "No clips to paste."; return }
+        writePayloadToPasteboard(item.payload)
+        lastKnownPayload = item.payload
+        _ = MacSystemServices.pasteIntoFrontmostApplication()
+    }
+
+    // MARK: - Updates
+
+    private static let updateManifestURL = URL(string: "https://aircopy-karnagebitcoin.netlify.app/version.json")!
+
+    func checkForUpdates() {
+        updateCheckStatus = "Checking…"
+        Task { await performUpdateCheck() }
+    }
+
+    private func performUpdateCheck() async {
+        struct Manifest: Decodable { let version: String; let build: Int; let url: String? }
+        do {
+            var request = URLRequest(url: Self.updateManifestURL)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let manifest = try JSONDecoder().decode(Manifest.self, from: data)
+            let currentBuild = Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0") ?? 0
+            if manifest.build > currentBuild {
+                updateCheckStatus = "Update available: \(manifest.version)"
+                if let urlString = manifest.url, let url = URL(string: urlString) {
+                    NSWorkspace.shared.open(url)
+                }
+            } else {
+                updateCheckStatus = "You're on the latest version."
+            }
+        } catch {
+            updateCheckStatus = "Couldn't reach the update server."
+        }
+    }
+
+    // MARK: - Reset
+
+    func resetAllSettings() {
+        syncEnabled = true
+        imageSyncEnabled = true
+        requireDeviceApproval = true
+        blockPasswordManagerClips = true
+        soundEnabled = false
+        historyLimit = 50
+        maxImageBytes = 25 * 1024 * 1024
+        clearHistoryOnQuit = false
+        pauseOnBattery = false
+        autoSyncNewDevices = true
+        statusText = "Settings reset to defaults."
+    }
+
     private func shouldSuppressIncomingClipboard(_ payload: ClipboardPayload, senderName: String) -> Bool {
+        if isImageOverLimit(payload) {
+            statusText = "Incoming image exceeds the size limit. Skipped."
+            return true
+        }
+
         guard let message = ClipboardPrivacyRules.incomingSuppressionMessage(
             for: payload,
             senderName: senderName,

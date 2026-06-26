@@ -5,6 +5,10 @@ import SwiftUI
 // Pixel-faithful recreation of the design handoff. Presented by the caller via
 // `.sheet(isPresented: $coordinator.settingsPresented)`; this view only lays out
 // the fixed-size card. Colors/fonts come from ACColor / ACFont tokens.
+//
+// Every row binds to real backend state on `coordinator` / `settings` — there are
+// no placeholder controls. Shortcuts are editable via `ShortcutRecorderField` and
+// the "Excluded apps" button opens a dedicated management sheet.
 
 struct ACSettingsSheet: View {
     @EnvironmentObject private var coordinator: AirCopyCoordinator
@@ -12,6 +16,7 @@ struct ACSettingsSheet: View {
     @EnvironmentObject private var toast: ACToastCenter
 
     @State private var tab: SettingsTab = .general
+    @State private var showExcludedApps = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -23,6 +28,10 @@ struct ACSettingsSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .acBorder(ACColor.border12, radius: 16)
         .shadow(color: .black.opacity(0.22), radius: 40, x: 0, y: 24)
+        .sheet(isPresented: $showExcludedApps) {
+            ACExcludedAppsSheet(isPresented: $showExcludedApps)
+                .environmentObject(coordinator)
+        }
     }
 
     // MARK: Left tab rail
@@ -44,7 +53,7 @@ struct ACSettingsSheet: View {
 
             Spacer(minLength: 0)
 
-            Text("AirCopy 1.0.0")
+            Text("AirCopy \(Self.shortVersion)")
                 .font(ACFont.mono(10.5))
                 .foregroundStyle(ACColor.textTertiary2)
                 .padding(.horizontal, 10)
@@ -161,27 +170,18 @@ struct ACSettingsSheet: View {
             ACSettingsRow(title: "New Macs", description: "How to treat Macs that appear",
                         control: .segmented(
                             options: [
-                                ACSegmentOption(label: "Auto-sync", value: AppSettingsStore.NewDeviceMode.sync.rawValue),
-                                ACSegmentOption(label: "Ask first", value: AppSettingsStore.NewDeviceMode.ask.rawValue),
+                                ACSegmentOption(label: "Auto-sync", value: "auto"),
+                                ACSegmentOption(label: "Ask first", value: "ask"),
                             ],
                             selection: Binding(
-                                get: { settings.newDeviceMode.rawValue },
-                                set: { settings.newDeviceMode = AppSettingsStore.NewDeviceMode(rawValue: $0) ?? .sync }))),
-            ACSettingsRow(title: "Sync over", description: "Networks AirCopy may use",
-                        control: .segmented(
-                            options: [
-                                ACSegmentOption(label: "Wi-Fi", value: AppSettingsStore.SyncOver.wifi.rawValue),
-                                ACSegmentOption(label: "Wi-Fi + LAN", value: AppSettingsStore.SyncOver.both.rawValue),
-                            ],
-                            selection: Binding(
-                                get: { settings.syncOver.rawValue },
-                                set: { settings.syncOver = AppSettingsStore.SyncOver(rawValue: $0) ?? .wifi }))),
+                                get: { coordinator.autoSyncNewDevices ? "auto" : "ask" },
+                                set: { coordinator.autoSyncNewDevices = ($0 == "auto") }))),
             ACSettingsRow(title: "Require approval", description: "Confirm before a Mac can pair",
                         control: .toggle(Binding(get: { coordinator.requireDeviceApproval },
                                                  set: { coordinator.requireDeviceApproval = $0 }))),
-            ACSettingsRow(title: "Pause on battery", description: "Stop syncing when unplugged",
-                        control: .toggle(Binding(get: { settings.pauseOnBattery },
-                                                 set: { settings.pauseOnBattery = $0 }))),
+            ACSettingsRow(title: "Pause on battery", description: "Stop syncing while on battery",
+                        control: .toggle(Binding(get: { coordinator.pauseOnBattery },
+                                                 set: { coordinator.pauseOnBattery = $0 }))),
         ]
     }
 
@@ -198,33 +198,31 @@ struct ACSettingsSheet: View {
             ACSettingsRow(title: "Max image size", description: "Skip images larger than this",
                         control: .segmented(
                             options: [
-                                ACSegmentOption(label: "5 MB", value: AppSettingsStore.MaxImage.five.rawValue),
-                                ACSegmentOption(label: "25 MB", value: AppSettingsStore.MaxImage.twentyFive.rawValue),
-                                ACSegmentOption(label: "Any", value: AppSettingsStore.MaxImage.any.rawValue),
+                                ACSegmentOption(label: "5 MB", value: "5"),
+                                ACSegmentOption(label: "25 MB", value: "25"),
+                                ACSegmentOption(label: "Any", value: "any"),
                             ],
                             selection: Binding(
-                                get: { settings.maxImage.rawValue },
-                                set: { settings.maxImage = AppSettingsStore.MaxImage(rawValue: $0) ?? .twentyFive }))),
-            ACSettingsRow(title: "Clear on quit", description: "Forget history when AirCopy closes",
-                        control: .toggle(Binding(get: { settings.clearOnQuit },
-                                                 set: { settings.clearOnQuit = $0 }))),
+                                get: { Self.maxImageSelection(coordinator.maxImageBytes) },
+                                set: { coordinator.maxImageBytes = Self.maxImageBytes(for: $0) }))),
+            ACSettingsRow(title: "Clear on quit", description: "Forget history when AirCopy quits",
+                        control: .toggle(Binding(get: { coordinator.clearHistoryOnQuit },
+                                                 set: { coordinator.clearHistoryOnQuit = $0 }))),
         ]
     }
 
     private var privacyRows: [ACSettingsRow] {
         [
-            ACSettingsRow(title: "Local network only", description: "Never route clips over the internet",
-                        control: .toggle(Binding(get: { settings.localNetworkOnly },
-                                                 set: { settings.localNetworkOnly = $0 }))),
-            ACSettingsRow(title: "Encrypt transfers", description: "End-to-end encrypt every clip",
-                        control: .toggle(Binding(get: { settings.encryptTransfers },
-                                                 set: { settings.encryptTransfers = $0 }))),
+            ACSettingsRow(title: "Local network only", description: "AirCopy never routes clips over the internet",
+                        control: .info(value: "Always on", mono: false)),
+            ACSettingsRow(title: "Encrypt transfers", description: "Every transfer is end-to-end encrypted",
+                        control: .info(value: "Always on", mono: false)),
             ACSettingsRow(title: "Ignore password fields", description: "Skip clips from password managers",
                         control: .toggle(Binding(get: { coordinator.blockPasswordManagerClips },
                                                  set: { coordinator.blockPasswordManagerClips = $0 }))),
             ACSettingsRow(title: "Excluded apps", description: "Apps AirCopy never reads from",
                         control: .button(label: "Manage…", danger: false) {
-                            toast.show("Excluded apps", accent: ACColor.accent)
+                            showExcludedApps = true
                         }),
         ]
     }
@@ -232,14 +230,15 @@ struct ACSettingsSheet: View {
     private var shortcutRows: [ACSettingsRow] {
         [
             ACSettingsRow(title: "Open AirCopy", description: "Bring the window forward",
-                        control: .info(value: "⌘ ⇧ V", mono: true)),
+                        control: .shortcut(hotkeyBinding(for: "open"))),
             ACSettingsRow(title: "Copy & sync", description: "Copy selection and push it",
-                        control: .info(value: "⌘ ⇧ C", mono: true)),
+                        control: .shortcut(hotkeyBinding(for: "copySync"))),
             ACSettingsRow(title: "Paste last clip", description: "Paste the most recent clip",
-                        control: .info(value: "⌘ ⇧ B", mono: true)),
-            ACSettingsRow(title: "Customize…", description: "Change these shortcuts",
-                        control: .button(label: "Edit", danger: false) {
-                            toast.show("Shortcut editor", accent: ACColor.accent)
+                        control: .shortcut(hotkeyBinding(for: "pasteLast"))),
+            ACSettingsRow(title: "Reset to defaults", description: "Restore the default shortcuts",
+                        control: .button(label: "Reset", danger: false) {
+                            coordinator.resetHotkeys()
+                            toast.show("Shortcuts reset", accent: ACColor.accent)
                         }),
         ]
     }
@@ -247,22 +246,61 @@ struct ACSettingsSheet: View {
     private var aboutRows: [ACSettingsRow] {
         [
             ACSettingsRow(title: "Version", description: nil,
-                        control: .info(value: "1.0.0 (128)", mono: true)),
+                        control: .info(value: Self.fullVersion, mono: true)),
             ACSettingsRow(title: "Sync engine", description: "Local peer discovery",
                         control: .info(value: "Bonjour", mono: false)),
-            ACSettingsRow(title: "Check for updates", description: "You're on the latest build",
+            ACSettingsRow(title: "Check for updates",
+                        description: coordinator.updateCheckStatus ?? "You're on the latest build",
                         control: .button(label: "Check", danger: false) {
-                            toast.show("You're up to date", accent: ACColor.accent)
+                            coordinator.checkForUpdates()
                         }),
             ACSettingsRow(title: "Reset settings", description: "Restore everything to defaults",
                         control: .button(label: "Reset", danger: true) {
+                            coordinator.resetAllSettings()
                             settings.resetToDefaults()
+                            coordinator.resetHotkeys()
                             toast.show("Settings reset", accent: ACColor.accent)
                         }),
         ]
     }
 
+    // MARK: Binding helpers
+
+    private func hotkeyBinding(for id: String) -> Binding<HotkeyBinding> {
+        Binding(
+            get: { coordinator.hotkeyBindings[id] ?? HotkeyBinding.defaultBindings()[id]! },
+            set: { coordinator.setHotkey(id, $0) })
+    }
+
     private static let historySteps = [25, 50, 100, 200, 500]
+
+    private static func maxImageSelection(_ bytes: Int) -> String {
+        switch bytes {
+        case 5 * 1024 * 1024: return "5"
+        case 25 * 1024 * 1024: return "25"
+        case 0: return "any"
+        default: return "25"
+        }
+    }
+
+    private static func maxImageBytes(for selection: String) -> Int {
+        switch selection {
+        case "5": return 5 * 1024 * 1024
+        case "25": return 25 * 1024 * 1024
+        case "any": return 0
+        default: return 25 * 1024 * 1024
+        }
+    }
+
+    private static var shortVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+    }
+
+    private static var fullVersion: String {
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+        return "\(short) (\(build))"
+    }
 }
 
 // MARK: - Tabs
@@ -309,6 +347,7 @@ private enum ACSettingsControl {
     case stepper(steps: [Int], value: Binding<Int>)
     case info(value: String, mono: Bool)
     case button(label: String, danger: Bool, action: () -> Void)
+    case shortcut(Binding<HotkeyBinding>)
 }
 
 private struct ACSettingsRow: Identifiable {
@@ -363,6 +402,8 @@ private struct ACSettingsRowView: View {
                 .foregroundStyle(ACColor.textSecondary2)
         case let .button(label, danger, action):
             ACRowButton(label: label, danger: danger, action: action)
+        case let .shortcut(binding):
+            ShortcutRecorderField(binding: binding)
         }
     }
 }
