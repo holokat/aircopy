@@ -7,6 +7,7 @@ struct AirCopyApp: App {
     @StateObject private var statusItemController = AppKitStatusItemController()
     @StateObject private var settingsStore = AppSettingsStore()
     @StateObject private var toastCenter = ACToastCenter()
+    @StateObject private var updater = SparkleUpdater()
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +15,7 @@ struct AirCopyApp: App {
                 .environmentObject(coordinator)
                 .environmentObject(settingsStore)
                 .environmentObject(toastCenter)
+                .environmentObject(updater)
                 .preferredColorScheme(coordinator.effectiveColorScheme)
                 .frame(minWidth: 1100, idealWidth: 1240, maxWidth: .infinity, minHeight: 760, idealHeight: 858, maxHeight: .infinity)
                 .background(

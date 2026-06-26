@@ -14,6 +14,7 @@ struct ACSettingsSheet: View {
     @EnvironmentObject private var coordinator: AirCopyCoordinator
     @EnvironmentObject private var settings: AppSettingsStore
     @EnvironmentObject private var toast: ACToastCenter
+    @EnvironmentObject private var updater: SparkleUpdater
 
     @State private var tab: SettingsTab = .general
     @State private var showExcludedApps = false
@@ -276,18 +277,9 @@ struct ACSettingsSheet: View {
             ACSettingsRow(title: "Sync engine", description: "Local peer discovery",
                         control: .info(value: "Bonjour", mono: false)),
             ACSettingsRow(title: "Check for updates",
-                        description: coordinator.updateCheckStatus ?? "You're on the latest build",
-                        control: .button(
-                            label: coordinator.isInstallingUpdate
-                                ? "Working…"
-                                : (coordinator.availableUpdate != nil ? "Install & Relaunch" : "Check"),
-                            danger: false) {
-                            if coordinator.isInstallingUpdate { return }
-                            if coordinator.availableUpdate != nil {
-                                coordinator.installAvailableUpdate()
-                            } else {
-                                coordinator.checkForUpdates()
-                            }
+                        description: "Download and install the latest version",
+                        control: .button(label: "Check", danger: false) {
+                            updater.checkForUpdates()
                         }),
             ACSettingsRow(title: "Reset settings", description: "Restore everything to defaults",
                         control: .button(label: "Reset", danger: true) {

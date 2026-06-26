@@ -12,6 +12,8 @@ INSTALLED_APP_DIR="$INSTALL_BASE_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
+SPARKLE_KEY_FILE="${AIRCOPY_SPARKLE_KEY_FILE:-$HOME/.config/aircopy/sparkle_ed_private_key}"
 INFO_PLIST="$ROOT_DIR/Resources/Info.plist"
 MODULE_CACHE="/tmp/aircopy-clang-cache"
 ICONSET_DIR="$DIST_DIR/AirCopy.iconset"
@@ -97,12 +99,23 @@ fi
 
 echo "Assembling app bundle..."
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 cp "$BINARY_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$INFO_PLIST" "$CONTENTS_DIR/Info.plist"
 build_icon
 if [[ -f "$DIST_DIR/AirCopy.icns" ]]; then
   cp "$DIST_DIR/AirCopy.icns" "$ICON_FILE"
+fi
+
+# Embed Sparkle.framework (the auto-updater) and point the executable's rpath at
+# Contents/Frameworks so it loads at runtime.
+SPARKLE_FW="$(find "$BUILD_DIR/artifacts" -path "*/Sparkle.xcframework/macos-*/Sparkle.framework" -type d 2>/dev/null | head -1)"
+if [[ -n "$SPARKLE_FW" ]]; then
+  echo "Embedding Sparkle.framework..."
+  ditto "$SPARKLE_FW" "$FRAMEWORKS_DIR/Sparkle.framework"
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$APP_NAME" 2>/dev/null || true
+else
+  echo "WARNING: Sparkle.framework not found under .build/artifacts; auto-update will not work." >&2
 fi
 
 if command -v codesign >/dev/null 2>&1; then
@@ -111,8 +124,25 @@ if command -v codesign >/dev/null 2>&1; then
   if [[ "$SIGN_IS_DEVELOPER_ID" == "1" ]]; then
     echo "Signing with Developer ID + hardened runtime: $SIGN_IDENTITY"
     # Real (Apple) timestamp + hardened runtime are required for notarization.
-    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$MACOS_DIR/$APP_NAME"
-    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
+    SIGN_FLAGS=(--force --options runtime --timestamp --sign "$SIGN_IDENTITY")
+
+    # Sparkle ships ad-hoc-signed; re-sign its nested code inside-out so the
+    # whole bundle is Developer-ID-signed and notarizable.
+    SPARKLE_BUNDLE="$FRAMEWORKS_DIR/Sparkle.framework"
+    if [[ -d "$SPARKLE_BUNDLE" ]]; then
+      echo "Signing Sparkle.framework components..."
+      codesign "${SIGN_FLAGS[@]}" "$SPARKLE_BUNDLE/Versions/B/XPCServices/Downloader.xpc"
+      codesign "${SIGN_FLAGS[@]}" "$SPARKLE_BUNDLE/Versions/B/XPCServices/Installer.xpc"
+      codesign "${SIGN_FLAGS[@]}" "$SPARKLE_BUNDLE/Versions/B/Updater.app/Contents/MacOS/Updater"
+      codesign "${SIGN_FLAGS[@]}" "$SPARKLE_BUNDLE/Versions/B/Updater.app"
+      codesign "${SIGN_FLAGS[@]}" "$SPARKLE_BUNDLE/Versions/B/Autoupdate"
+      codesign "${SIGN_FLAGS[@]}" "$SPARKLE_BUNDLE"
+    fi
+
+    codesign "${SIGN_FLAGS[@]}" "$MACOS_DIR/$APP_NAME"
+    codesign "${SIGN_FLAGS[@]}" "$APP_DIR"
+    echo "Verifying bundle signature…"
+    codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | tail -2
   elif [[ -n "$SIGN_IDENTITY" ]]; then
     echo "Applying development signature (not notarizable): $SIGN_IDENTITY"
     codesign --force --deep --options runtime --timestamp=none --sign "$SIGN_IDENTITY" "$APP_DIR"
@@ -162,6 +192,38 @@ echo "Syncing website assets..."
 mkdir -p "$WEBSITE_ASSETS_DIR" "$WEBSITE_DOWNLOADS_DIR"
 cp "$ROOT_DIR/Resources/1024.png" "$WEBSITE_ASSETS_DIR/aircopy-logo.png"
 cp "$ZIP_PATH" "$WEBSITE_DOWNLOADS_DIR/$APP_NAME-macOS.zip"
+
+# Generate the Sparkle appcast (EdDSA-signed) so the in-app updater can find and
+# verify this release. SUFeedURL in Info.plist points at this file.
+SPARKLE_SIGN="$(find "$BUILD_DIR/artifacts" -path "*/Sparkle/bin/sign_update" -type f 2>/dev/null | head -1)"
+if [[ -n "$SPARKLE_SIGN" && -f "$SPARKLE_KEY_FILE" ]]; then
+  echo "Generating signed appcast.xml..."
+  SHORT_VER="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$INFO_PLIST")"
+  BUILD_VER="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$INFO_PLIST")"
+  MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$INFO_PLIST")"
+  SIG_ATTRS="$("$SPARKLE_SIGN" --ed-key-file "$SPARKLE_KEY_FILE" "$ZIP_PATH")"
+  PUBDATE="$(date '+%a, %d %b %Y %H:%M:%S %z')"
+  cat > "$ROOT_DIR/website/appcast.xml" <<EOF
+<?xml version="1.0" standalone="yes"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>AirCopy</title>
+    <link>https://aircopyapp.com/appcast.xml</link>
+    <item>
+      <title>Version ${SHORT_VER}</title>
+      <pubDate>${PUBDATE}</pubDate>
+      <sparkle:version>${BUILD_VER}</sparkle:version>
+      <sparkle:shortVersionString>${SHORT_VER}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>${MIN_OS}</sparkle:minimumSystemVersion>
+      <enclosure url="https://aircopyapp.com/downloads/${APP_NAME}-macOS.zip" ${SIG_ATTRS} type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
+EOF
+  echo "  website/appcast.xml (v$SHORT_VER, build $BUILD_VER)"
+else
+  echo "Skipping appcast (need Sparkle sign_update + key file at $SPARKLE_KEY_FILE)." >&2
+fi
 
 if [[ "$KEEP_STAGING_APP" != "1" ]]; then
   echo "Removing staging app bundle from dist..."

@@ -5,6 +5,7 @@ struct ACMainWindow: View {
     @EnvironmentObject private var coordinator: AirCopyCoordinator
     @EnvironmentObject private var settings: AppSettingsStore
     @EnvironmentObject private var toast: ACToastCenter
+    @EnvironmentObject private var updater: SparkleUpdater
 
     @State private var query = ""
     @State private var typeFilter: ClipTypeFilter = .all
@@ -43,6 +44,7 @@ struct ACMainWindow: View {
                 .environmentObject(coordinator)
                 .environmentObject(settings)
                 .environmentObject(toast)
+                .environmentObject(updater)
                 .preferredColorScheme(coordinator.effectiveColorScheme)
         }
         .sheet(isPresented: $addMacPresented) {
