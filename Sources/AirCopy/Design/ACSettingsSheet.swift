@@ -274,8 +274,17 @@ struct ACSettingsSheet: View {
                         control: .info(value: "Bonjour", mono: false)),
             ACSettingsRow(title: "Check for updates",
                         description: coordinator.updateCheckStatus ?? "You're on the latest build",
-                        control: .button(label: "Check", danger: false) {
-                            coordinator.checkForUpdates()
+                        control: .button(
+                            label: coordinator.isInstallingUpdate
+                                ? "Working…"
+                                : (coordinator.availableUpdate != nil ? "Install & Relaunch" : "Check"),
+                            danger: false) {
+                            if coordinator.isInstallingUpdate { return }
+                            if coordinator.availableUpdate != nil {
+                                coordinator.installAvailableUpdate()
+                            } else {
+                                coordinator.checkForUpdates()
+                            }
                         }),
             ACSettingsRow(title: "Reset settings", description: "Restore everything to defaults",
                         control: .button(label: "Reset", danger: true) {

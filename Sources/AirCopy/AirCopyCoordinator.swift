@@ -6,6 +6,13 @@ import MultipeerConnectivity
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A newer build advertised by the update manifest.
+struct AvailableUpdate: Equatable {
+    let version: String
+    let build: Int
+    let url: URL
+}
+
 @MainActor
 final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published var syncEnabled = true {
@@ -158,6 +165,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var isPausedForBattery = false
     /// Result string from the most recent "Check for updates".
     @Published var updateCheckStatus: String?
+    /// Set when a newer build is published; drives the "Install & Relaunch" button.
+    @Published private(set) var availableUpdate: AvailableUpdate?
+    @Published private(set) var isInstallingUpdate = false
 
     private var powerRunLoopSource: CFRunLoopSource?
     private var historyPersistTask: Task<Void, Never>?
@@ -1858,6 +1868,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static let updateManifestURL = URL(string: "https://aircopy-karnagebitcoin.netlify.app/version.json")!
 
     func checkForUpdates() {
+        guard !isInstallingUpdate else { return }
         updateCheckStatus = "Checking…"
         Task { await performUpdateCheck() }
     }
@@ -1870,17 +1881,112 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             let (data, _) = try await URLSession.shared.data(for: request)
             let manifest = try JSONDecoder().decode(Manifest.self, from: data)
             let currentBuild = Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0") ?? 0
-            if manifest.build > currentBuild {
-                updateCheckStatus = "Update available: \(manifest.version)"
-                if let urlString = manifest.url, let url = URL(string: urlString) {
-                    NSWorkspace.shared.open(url)
-                }
+            if manifest.build > currentBuild, let urlString = manifest.url, let url = URL(string: urlString) {
+                availableUpdate = AvailableUpdate(version: manifest.version, build: manifest.build, url: url)
+                updateCheckStatus = "Version \(manifest.version) is available."
             } else {
+                availableUpdate = nil
                 updateCheckStatus = "You're on the latest version."
             }
         } catch {
+            availableUpdate = nil
             updateCheckStatus = "Couldn't reach the update server."
         }
+    }
+
+    /// Downloads the available update, swaps it into place, and relaunches.
+    func installAvailableUpdate() {
+        guard let update = availableUpdate, !isInstallingUpdate else { return }
+        isInstallingUpdate = true
+        updateCheckStatus = "Downloading version \(update.version)…"
+        Task { await performInstall(update) }
+    }
+
+    private func performInstall(_ update: AvailableUpdate) async {
+        let destination = Bundle.main.bundleURL
+        let parent = destination.deletingLastPathComponent()
+        do {
+            // Download the zip (off the main thread via URLSession), then unzip
+            // and locate the new bundle on a background task so we never block UI.
+            let (downloadedZip, _) = try await URLSession.shared.download(from: update.url)
+            let newApp = try await Task.detached(priority: .userInitiated) {
+                try Self.unpackUpdate(downloadedZip: downloadedZip)
+            }.value
+
+            guard FileManager.default.isWritableFile(atPath: parent.path) else {
+                // Can't replace in place (e.g. /Applications owned by root) — reveal it.
+                NSWorkspace.shared.activateFileViewerSelecting([newApp])
+                updateCheckStatus = "Downloaded. Drag AirCopy into \(parent.lastPathComponent) to finish."
+                isInstallingUpdate = false
+                return
+            }
+
+            updateCheckStatus = "Installing version \(update.version)…"
+            try Self.launchSwapAndRelaunch(newApp: newApp, destination: destination)
+            // Quit so the helper can replace the bundle, then it relaunches us.
+            NSApp.terminate(nil)
+        } catch {
+            updateCheckStatus = "Update failed: \(error.localizedDescription)"
+            isInstallingUpdate = false
+        }
+    }
+
+    /// Unzips the downloaded archive into a fresh temp dir and returns the .app inside.
+    private nonisolated static func unpackUpdate(downloadedZip: URL) throws -> URL {
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("AirCopyUpdate-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        let zipURL = work.appendingPathComponent("update.zip")
+        try fm.moveItem(at: downloadedZip, to: zipURL)
+
+        let unzipped = work.appendingPathComponent("unpacked", isDirectory: true)
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-x", "-k", zipURL.path, unzipped.path]
+        try ditto.run()
+        ditto.waitUntilExit()
+        guard ditto.terminationStatus == 0 else {
+            throw NSError(domain: "AirCopyUpdate", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't expand the download."])
+        }
+
+        guard let app = appBundle(in: unzipped, fileManager: fm) else {
+            throw NSError(domain: "AirCopyUpdate", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "The download didn't contain AirCopy."])
+        }
+        return app
+    }
+
+    private nonisolated static func appBundle(in dir: URL, fileManager fm: FileManager) -> URL? {
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey]) else { return nil }
+        if let app = items.first(where: { $0.pathExtension == "app" }) { return app }
+        for sub in items where (try? sub.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            if let app = appBundle(in: sub, fileManager: fm) { return app }
+        }
+        return nil
+    }
+
+    /// Writes a helper script that waits for this process to exit, swaps the
+    /// bundle, and relaunches — then starts it detached.
+    private nonisolated static func launchSwapAndRelaunch(newApp: URL, destination: URL) throws {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let script = """
+        #!/bin/bash
+        NEW_APP="$1"; DEST_APP="$2"; PID="$3"
+        for _ in $(seq 1 300); do kill -0 "$PID" 2>/dev/null || break; sleep 0.2; done
+        /bin/rm -rf "$DEST_APP"
+        /usr/bin/ditto "$NEW_APP" "$DEST_APP"
+        /usr/bin/xattr -dr com.apple.quarantine "$DEST_APP" 2>/dev/null || true
+        /usr/bin/open "$DEST_APP"
+        """
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aircopy-update-\(UUID().uuidString).sh")
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/bash")
+        helper.arguments = [scriptURL.path, newApp.path, destination.path, "\(pid)"]
+        try helper.run() // detached; it outlives this process
     }
 
     // MARK: - Reset
