@@ -24,6 +24,16 @@ enum ClipTypeFilter: String, CaseIterable, Identifiable {
         }
     }
 
+    var symbol: String {
+        switch self {
+        case .all: return "square.grid.2x2"
+        case .text: return "text.alignleft"
+        case .image: return "photo"
+        case .link: return "link"
+        case .color: return "paintpalette"
+        }
+    }
+
     func matches(_ kind: ClipCardKind) -> Bool {
         switch self {
         case .all: return true

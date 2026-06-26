@@ -246,13 +246,17 @@ struct ACMainWindow: View {
                         typeFilter = seg
                         pinnedOnly = false
                     } label: {
-                        Text(seg.label)
-                            .font(ACFont.sans(12.5, weight: .medium))
-                            .foregroundStyle(active ? ACColor.accent : ACColor.textSecondary)
-                            .padding(.horizontal, 15)
-                            .padding(.vertical, 7)
-                            .background(active ? ACColor.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
-                            .shadow(color: active ? Color(hex: 0x141E3C, alpha: 0.14) : .clear, radius: 1.5, x: 0, y: 1)
+                        HStack(spacing: 6) {
+                            Image(systemName: seg.symbol)
+                                .font(.system(size: 11, weight: .medium))
+                            Text(seg.label)
+                                .font(ACFont.sans(12.5, weight: .medium))
+                        }
+                        .foregroundStyle(active ? ACColor.accent : ACColor.textSecondary)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 7)
+                        .background(active ? ACColor.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
+                        .shadow(color: active ? Color(hex: 0x141E3C, alpha: 0.14) : .clear, radius: 1.5, x: 0, y: 1)
                     }
                     .buttonStyle(.plain)
                 }
