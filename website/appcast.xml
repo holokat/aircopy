@@ -5,11 +5,11 @@
     <link>https://aircopyapp.com/appcast.xml</link>
     <item>
       <title>Version 0.6.1</title>
-      <pubDate>Fri, 26 Jun 2026 16:45:48 +0900</pubDate>
+      <pubDate>Fri, 26 Jun 2026 17:02:58 +0900</pubDate>
       <sparkle:version>10</sparkle:version>
       <sparkle:shortVersionString>0.6.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://aircopyapp.com/downloads/AirCopy-macOS.zip" sparkle:edSignature="Z0GRAkFaSuWIf02In0GiMOp73jiVOK7mC1Bv/sB5+bb5f7p6OoDVC6qMjdY9RrZ2RHtQQhrHLFagN79IOteCAg==" length="2003214" type="application/octet-stream"/>
+      <enclosure url="https://aircopyapp.com/downloads/AirCopy-macOS.zip" sparkle:edSignature="F/WtTJmntY0wIgABUretcobhUrVphVfTQbB7nCvx5PV2kUynL3sT/UIWIWcWIAi1FSEwzvJsExejQamMsFq7Bw==" length="2003217" type="application/octet-stream"/>
     </item>
   </channel>
 </rss>
