@@ -6,17 +6,14 @@ import SwiftUI
 final class AppKitStatusItemController: NSObject, ObservableObject {
     private var statusItem: NSStatusItem?
     private weak var coordinator: AirCopyCoordinator?
-    private weak var subscriptionManager: SubscriptionManager?
     private var cancellables: Set<AnyCancellable> = []
     private var isPreparingForTermination = false
     private var wantsVisible = true
 
-    func install(coordinator: AirCopyCoordinator, subscriptionManager: SubscriptionManager) {
+    func install(coordinator: AirCopyCoordinator) {
         guard !isPreparingForTermination else { return }
 
         self.coordinator = coordinator
-        self.subscriptionManager = subscriptionManager
-        coordinator.setSubscriptionAccess(subscriptionManager.hasActiveSubscription)
 
         createStatusItemIfNeeded()
         observeStateChanges()
@@ -48,7 +45,6 @@ final class AppKitStatusItemController: NSObject, ObservableObject {
         }
 
         coordinator = nil
-        subscriptionManager = nil
     }
 
     deinit {

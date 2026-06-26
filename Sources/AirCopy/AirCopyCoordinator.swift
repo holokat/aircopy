@@ -13,12 +13,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             guard syncEnabled != oldValue else { return }
 
             if syncEnabled {
-                guard hasSubscriptionAccess else {
-                    syncEnabled = false
-                    statusText = "Start your AirCopy subscription to sync between Macs."
-                    return
-                }
-
                 startServices()
                 statusText = "Sync to All is on."
             } else {
@@ -115,7 +109,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var incomingClipboardItems: [IncomingClipboardItem] = []
     @Published private(set) var protectedPasswordManagerApplications: [ProtectedAppRule] = AppSourcePrivacyPolicy.protectedPasswordManagerApplications
     @Published private(set) var savedItemsBaseDirectoryPath: String
-    @Published private(set) var hasSubscriptionAccess = false
     @Published private(set) var temporarySyncUntil: Date? {
         didSet {
             if let temporarySyncUntil {
@@ -297,7 +290,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             self.syncEnabled = false
         }
 
-        if hasSubscriptionAccess, let payload = lastKnownPayload, !shouldSuppressSync(for: payload) {
+        if let payload = lastKnownPayload, !shouldSuppressSync(for: payload) {
             _ = recordHistory(
                 payload: payload,
                 source: "Current clipboard on this Mac",
@@ -309,7 +302,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         registerConnectivityObservers()
         updatePowerMonitoring()
         setupHotkeys()
-        statusText = "Checking subscription..."
     }
 
     deinit {
@@ -401,7 +393,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     var syncModeSummary: String {
-        guard hasSubscriptionAccess else { return "Subscription required" }
         guard syncEnabled else { return "Manual" }
 
         if let temporarySyncUntil {
@@ -427,24 +418,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         (savedItemsBaseDirectoryPath as NSString).abbreviatingWithTildeInPath
     }
 
-    func setSubscriptionAccess(_ hasAccess: Bool) {
-        if hasSubscriptionAccess == hasAccess {
-            if !hasAccess {
-                statusText = "Start your AirCopy subscription to sync between Macs."
-            }
-            return
-        }
-
-        hasSubscriptionAccess = hasAccess
-
-        if hasAccess {
-            startSubscriptionServices()
-        } else {
-            stopSubscriptionServices()
-            statusText = "Start your AirCopy subscription to sync between Macs."
-        }
-    }
-
     func filteredHistory(searchText: String, filter: HistoryFilter) -> [ClipboardHistoryItem] {
         ClipboardHistoryStore.filtered(clipboardHistory, searchText: searchText, filter: filter)
     }
@@ -454,7 +427,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func acceptIncomingClipboardItem(id: UUID) {
-        guard requireSubscriptionAccess(message: "Start your AirCopy subscription to accept team clips.") else { return }
         guard let item = incomingClipboardItems.first(where: { $0.id == id }) else {
             statusText = "That inbox item is no longer available."
             return
@@ -485,8 +457,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func restoreHistoryItem(id: UUID) {
-        guard requireSubscriptionAccess(message: "Start your AirCopy subscription to restore clipboard history.") else { return }
-
         guard let item = clipboardHistory.first(where: { $0.id == id }) else {
             statusText = "That history item is no longer available."
             return
@@ -510,14 +480,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func sendHistoryItem(_ item: ClipboardHistoryItem, to deviceID: String) {
-        guard requireSubscriptionAccess() else { return }
         guard guardSensitivePayload(item.payload, action: .manualSend) else { return }
         sendPayload(item.payload, toDeviceIDs: [deviceID], historyItemID: item.id, sendOnly: true)
     }
 
     func sendCurrentClipboard(to deviceID: String) {
-        guard requireSubscriptionAccess() else { return }
-
         let frontmost = MacSystemServices.frontmostApplicationInfo()
         frontmostApplicationName = frontmost.name ?? frontmostApplicationName
 
@@ -544,7 +511,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     func startTemporarySync(minutes: Int = 10) {
-        guard requireSubscriptionAccess() else { return }
         syncEnabled = true
         temporarySyncUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
         statusText = "Sync enabled for \(minutes) minutes."
@@ -552,7 +518,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     func setSyncToAllEnabled(_ enabled: Bool) {
         if enabled {
-            guard requireSubscriptionAccess() else { return }
             temporarySyncUntil = nil
             enableAutoSyncForAllTrustedDevices()
             syncEnabled = true
@@ -762,7 +727,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         settingsPresented = true
     }
 
-    private func startSubscriptionServices() {
+    /// Brings sync online at launch: records the current clipboard, starts the
+    /// clipboard monitor and connectivity services, and reports readiness.
+    func start() {
         if let temporarySyncUntil, temporarySyncUntil <= Date() {
             self.temporarySyncUntil = nil
             syncEnabled = false
@@ -790,36 +757,11 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         statusText = syncEnabled
             ? (connectedPeerCount == 0 ? "Approve a nearby Mac or keep syncing locally." : "Ready.")
-            : "Subscription active. Sync is off."
-    }
-
-    private func stopSubscriptionServices() {
-        stopServices()
-        clipboardTask?.cancel()
-        clipboardTask = nil
-        connectivityHeartbeatTask?.cancel()
-        connectivityHeartbeatTask = nil
-        connectivityWatchdogTask?.cancel()
-        connectivityWatchdogTask = nil
-        lostPeerTasksByDeviceID.values.forEach { $0.cancel() }
-        lostPeerTasksByDeviceID.removeAll()
-        syncExpirationTask?.cancel()
-        syncExpirationTask = nil
-    }
-
-    @discardableResult
-    private func requireSubscriptionAccess(message: String = "Start your AirCopy subscription to sync between Macs.") -> Bool {
-        guard hasSubscriptionAccess else {
-            statusText = message
-            return false
-        }
-
-        return true
+            : "Sync is off."
     }
 
     private func startServices() {
         guard !isPreparingForTermination else { return }
-        guard hasSubscriptionAccess else { return }
         guard advertiser == nil, browser == nil else { return }
 
         let advertiser = MCNearbyServiceAdvertiser(
@@ -1019,7 +961,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func recoverConnectivityIfNeeded(reason: String, allowSessionRebuild: Bool) {
-        guard hasSubscriptionAccess, syncEnabled else { return }
+        guard syncEnabled else { return }
 
         let reconnectableTrustedPeers = peerDevices.filter {
             $0.trustState == .trusted && ($0.isDiscovered || peerIDByDeviceID[$0.id] != nil)
@@ -1050,7 +992,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     private func performConnectivityWatchdogCheck() {
-        guard hasSubscriptionAccess, syncEnabled else { return }
+        guard syncEnabled else { return }
 
         let trustedPeersNeedingAttention = peerDevices.filter {
             $0.trustState == .trusted && !$0.isConnected && ($0.isDiscovered || peerIDByDeviceID[$0.id] != nil)
@@ -1096,8 +1038,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         localImagePausedStatus: String = "Saved image locally. Image sync is paused.",
         localSyncOffStatus: String = "Saved locally. Sync is off."
     ) -> Bool {
-        guard hasSubscriptionAccess else { return false }
-
         let frontmost = MacSystemServices.frontmostApplicationInfo()
         frontmostApplicationName = frontmost.name ?? "Unknown App"
 
@@ -1169,8 +1109,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         historyItemID: UUID?,
         sendOnly: Bool = false
     ) {
-        guard requireSubscriptionAccess() else { return }
-
         let targets = targetDeviceIDs.compactMap { deviceID -> (String, PeerDeviceState, MCPeerID)? in
             guard let state = peerStateByID[deviceID], let peer = peerIDByDeviceID[deviceID] else { return nil }
             guard connectedDeviceIDs.contains(deviceID) || session.connectedPeers.contains(peer) else { return nil }
@@ -1937,7 +1875,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private func resumeFromBatteryPause() {
         statusText = "Syncing resumed."
-        if syncEnabled && hasSubscriptionAccess { startServices() }
+        if syncEnabled { startServices() }
     }
 
     // MARK: - Global hotkeys
@@ -1976,14 +1914,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     // MARK: - Hotkey actions
 
     func sendCurrentClipboardToAllDevices() {
-        guard requireSubscriptionAccess() else { return }
         let targets = autoSyncPeers.map(\.id)
         guard !targets.isEmpty else { statusText = "No synced Macs to send to."; return }
         for id in targets { sendCurrentClipboard(to: id) }
     }
 
     func pasteLatestClip() {
-        guard requireSubscriptionAccess() else { return }
         guard let item = latestClipboardItem else { statusText = "No clips to paste."; return }
         writePayloadToPasteboard(item.payload)
         lastKnownPayload = item.payload

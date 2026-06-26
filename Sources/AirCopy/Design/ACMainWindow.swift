@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ACMainWindow: View {
     @EnvironmentObject private var coordinator: AirCopyCoordinator
-    @EnvironmentObject private var subscription: SubscriptionManager
     @EnvironmentObject private var settings: AppSettingsStore
     @EnvironmentObject private var toast: ACToastCenter
 
@@ -125,7 +124,6 @@ struct ACMainWindow: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: selectedID)
-        .overlay(alignment: .topLeading) { subscriptionGate }
     }
 
     private var mainColumn: some View {
@@ -355,21 +353,6 @@ struct ACMainWindow: View {
         .padding(.bottom, 40)
     }
 
-    // MARK: - Subscription gate (payment preserved)
-
-    @ViewBuilder
-    private var subscriptionGate: some View {
-        if !subscription.hasActiveSubscription {
-            ZStack {
-                Color.black.opacity(0.04).ignoresSafeArea()
-                SubscriptionGateView()
-                    .frame(maxWidth: 420)
-                    .padding(24)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
     // MARK: - Derived data
 
     private var trustedPeers: [PeerDeviceState] {
@@ -396,16 +379,16 @@ struct ACMainWindow: View {
         return true
     }
 
-    private var gatedItems: [ClipboardHistoryItem] {
+    private var syncedItems: [ClipboardHistoryItem] {
         coordinator.clipboardHistory.filter { deviceSyncOn(deviceID(for: $0)) }
     }
 
-    private var total: Int { gatedItems.count }
-    private var pinnedCount: Int { gatedItems.filter(\.isPinned).count }
+    private var total: Int { syncedItems.count }
+    private var pinnedCount: Int { syncedItems.filter(\.isPinned).count }
 
     private var filteredItems: [ClipboardHistoryItem] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        var items = gatedItems.filter { item in
+        var items = syncedItems.filter { item in
             if pinnedOnly && !item.isPinned { return false }
             if !typeFilter.matches(item.cardKind) { return false }
             if let dev = deviceFilter, deviceID(for: item) != dev { return false }
