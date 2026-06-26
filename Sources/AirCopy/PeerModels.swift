@@ -90,18 +90,7 @@ struct PeerDeviceState: Identifiable, Hashable {
     var lastClipboardSummary: String?
     var encryptedTransport: Bool
 
-    var deviceSymbolName: String {
-        let normalizedName = displayName.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: .current
-        )
-
-        if normalizedName.contains("macbook") || normalizedName.contains("laptop") || normalizedName.contains("notebook") {
-            return "laptopcomputer"
-        }
-
-        return "desktopcomputer"
-    }
+    var deviceSymbolName: String { deviceSFSymbolName(for: displayName) }
 
     var statusSummary: String {
         if isConnected {
@@ -114,6 +103,28 @@ struct PeerDeviceState: Identifiable, Hashable {
 
         return "Offline"
     }
+}
+
+/// Maps a human device name to the SF Symbol that best depicts its hardware.
+func deviceSFSymbolName(for name: String) -> String {
+    let normalized = name.folding(
+        options: [.caseInsensitive, .diacriticInsensitive],
+        locale: .current
+    )
+
+    if normalized.contains("macbook") || normalized.contains("laptop") || normalized.contains("notebook") || normalized.contains("air") {
+        return "laptopcomputer"
+    }
+    if normalized.contains("mini") {
+        return "macmini"
+    }
+    if normalized.contains("studio") {
+        return "macstudio"
+    }
+    if normalized.contains("mac pro") || normalized.contains("macpro") {
+        return "macpro.gen3"
+    }
+    return "desktopcomputer"
 }
 
 struct AppExclusion: Identifiable, Codable, Hashable {

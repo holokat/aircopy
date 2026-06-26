@@ -194,10 +194,5 @@ struct ACClipCard: View {
         .opacity(hovering || pinned ? 1 : 0)
     }
 
-    private var deviceSymbol: String {
-        let n = deviceName.lowercased()
-        if n.contains("macbook") || n.contains("laptop") || n.contains("air") { return "laptopcomputer" }
-        if n.contains("mini") { return "macmini" }
-        return "desktopcomputer"
-    }
+    private var deviceSymbol: String { deviceSFSymbolName(for: deviceName) }
 }

@@ -22,7 +22,8 @@ struct ACSidebar: View {
             HStack {
                 Text("Devices")
                     .font(ACFont.sans(10.5, weight: .semibold))
-                    .tracking(0.7)
+                    .textCase(.uppercase)
+                    .tracking(1.1)
                     .foregroundStyle(ACColor.textTertiary)
                 Spacer()
                 Text(syncShort)
@@ -76,9 +77,10 @@ struct ACSidebar: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: device.symbol)
-                    .font(.system(size: 13))
+                    .font(.system(size: 15, weight: .regular))
+                    .symbolRenderingMode(.monochrome)
                     .foregroundStyle(iconColor)
-                    .frame(width: 16)
+                    .frame(width: 20)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 7) {
                         Text(device.name)
