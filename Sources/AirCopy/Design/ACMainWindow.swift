@@ -373,22 +373,17 @@ struct ACMainWindow: View {
         return "ext:" + item.senderName
     }
 
-    private func deviceSyncOn(_ id: String) -> Bool {
-        if id == "local" { return coordinator.syncEnabled }
-        if let peer = peerByID[id] { return peer.isAutoSyncEnabled }
-        return true
-    }
-
-    private var syncedItems: [ClipboardHistoryItem] {
-        coordinator.clipboardHistory.filter { deviceSyncOn(deviceID(for: $0)) }
-    }
-
-    private var total: Int { syncedItems.count }
-    private var pinnedCount: Int { syncedItems.filter(\.isPinned).count }
+    // The full clipboard history is always shown. A device's auto-sync toggle
+    // only governs whether new clips are *sent* to/from it — it must not hide
+    // clips already in history (doing so made received clips vanish when a
+    // toggle flipped or a peer's connection flapped). Filtering by device is
+    // explicit, via tapping a device in the sidebar (`deviceFilter`).
+    private var total: Int { coordinator.clipboardHistory.count }
+    private var pinnedCount: Int { coordinator.clipboardHistory.filter(\.isPinned).count }
 
     private var filteredItems: [ClipboardHistoryItem] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        var items = syncedItems.filter { item in
+        var items = coordinator.clipboardHistory.filter { item in
             if pinnedOnly && !item.isPinned { return false }
             if !typeFilter.matches(item.cardKind) { return false }
             if let dev = deviceFilter, deviceID(for: item) != dev { return false }
