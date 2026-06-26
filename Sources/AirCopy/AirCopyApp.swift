@@ -16,7 +16,7 @@ struct AirCopyApp: App {
                 .environmentObject(subscriptionManager)
                 .environmentObject(settingsStore)
                 .environmentObject(toastCenter)
-                .preferredColorScheme(.light)
+                .preferredColorScheme(coordinator.effectiveColorScheme)
                 .frame(minWidth: 1100, idealWidth: 1240, maxWidth: .infinity, minHeight: 760, idealHeight: 858, maxHeight: .infinity)
                 .background(
                     StatusItemInstallerView()

@@ -106,7 +106,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var peerDevices: [PeerDeviceState] = []
     @Published private(set) var clipboardHistory: [ClipboardHistoryItem] = []
     @Published private(set) var recentlyCopiedHistoryItemID: UUID?
-    @Published private(set) var effectiveColorScheme: ColorScheme
+    /// The color scheme to force on the window. `nil` means "follow the system
+    /// appearance" (the System / automatic option), letting SwiftUI inherit and
+    /// react to macOS Appearance changes on its own.
+    @Published private(set) var effectiveColorScheme: ColorScheme?
     @Published private(set) var appIconImage: NSImage?
     @Published private(set) var imageThumbnailByFingerprint: [String: NSImage] = [:]
     @Published private(set) var incomingClipboardItems: [IncomingClipboardItem] = []
@@ -204,7 +207,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private var recentMessageSet = Set<UUID>()
     private var outboundMessageHistoryMap: [UUID: UUID] = [:]
     private var clipboardTask: Task<Void, Never>?
-    private var appearanceTask: Task<Void, Never>?
     private var connectivityHeartbeatTask: Task<Void, Never>?
     private var connectivityWatchdogTask: Task<Void, Never>?
     private var lostPeerTasksByDeviceID: [String: Task<Void, Never>] = [:]
@@ -264,7 +266,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.favoriteFingerprints = Self.loadStringSet(forKey: Self.favoriteFingerprintsKey)
         self.excludedAppMap = Self.loadStringDictionary(forKey: Self.excludedAppsKey)
         self.frontmostApplicationName = frontmost.name ?? "Unknown App"
-        self.effectiveColorScheme = .light
+        self.effectiveColorScheme = nil
         self.appIconImage = AppIconProvider.loadAppIcon()
         self.lastObservedChangeCount = NSPasteboard.general.changeCount
         self.lastKnownPayload = ClipboardPayloadReader.readPayload(
@@ -304,7 +306,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             )
         }
 
-        startAppearanceMonitor()
         registerConnectivityObservers()
         updatePowerMonitoring()
         setupHotkeys()
@@ -323,8 +324,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         clipboardTask?.cancel()
         clipboardTask = nil
-        appearanceTask?.cancel()
-        appearanceTask = nil
         connectivityHeartbeatTask?.cancel()
         connectivityHeartbeatTask = nil
         connectivityWatchdogTask?.cancel()
@@ -868,18 +867,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                 try? await Task.sleep(for: .milliseconds(300))
                 await MainActor.run {
                     self?.pollClipboard()
-                }
-            }
-        }
-    }
-
-    private func startAppearanceMonitor() {
-        appearanceTask?.cancel()
-        appearanceTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                await MainActor.run {
-                    self?.updateEffectiveColorScheme()
                 }
             }
         }
@@ -1595,11 +1582,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         sortAndTrimHistory()
     }
 
-    private func updateEffectiveColorScheme(for date: Date = Date()) {
+    private func updateEffectiveColorScheme() {
         switch appearancePreference {
         case .automatic:
-            let hour = Calendar.current.component(.hour, from: date)
-            effectiveColorScheme = (7..<18).contains(hour) ? .light : .dark
+            // Follow the macOS system appearance — `nil` lets SwiftUI inherit it
+            // and update live when the user flips Light/Dark in System Settings.
+            effectiveColorScheme = nil
         case .light:
             effectiveColorScheme = .light
         case .dark:

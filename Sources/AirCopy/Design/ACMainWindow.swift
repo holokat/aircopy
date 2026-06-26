@@ -44,11 +44,13 @@ struct ACMainWindow: View {
                 .environmentObject(coordinator)
                 .environmentObject(settings)
                 .environmentObject(toast)
+                .preferredColorScheme(coordinator.effectiveColorScheme)
         }
         .sheet(isPresented: $addMacPresented) {
             ACAddMacSheet(isPresented: $addMacPresented)
                 .environmentObject(coordinator)
                 .environmentObject(toast)
+                .preferredColorScheme(coordinator.effectiveColorScheme)
         }
     }
 
@@ -454,7 +456,7 @@ struct ACMainWindow: View {
                 id: "local",
                 name: coordinator.localDeviceName,
                 isThis: true,
-                symbol: "laptopcomputer",
+                symbol: deviceSFSymbolName(for: coordinator.localDeviceName),
                 syncOn: coordinator.syncEnabled,
                 clipCount: counts["local"] ?? 0
             )

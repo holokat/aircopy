@@ -31,6 +31,7 @@ struct ACSettingsSheet: View {
         .sheet(isPresented: $showExcludedApps) {
             ACExcludedAppsSheet(isPresented: $showExcludedApps)
                 .environmentObject(coordinator)
+                .preferredColorScheme(coordinator.effectiveColorScheme)
         }
     }
 
@@ -150,6 +151,28 @@ struct ACSettingsSheet: View {
 
     private var generalRows: [ACSettingsRow] {
         [
+            ACSettingsRow(title: "Appearance", description: "Match your Mac, or force a look",
+                        control: .segmented(
+                            options: [
+                                ACSegmentOption(label: "Light", value: "light"),
+                                ACSegmentOption(label: "Dark", value: "dark"),
+                                ACSegmentOption(label: "System", value: "system"),
+                            ],
+                            selection: Binding(
+                                get: {
+                                    switch coordinator.appearancePreference {
+                                    case .light: return "light"
+                                    case .dark: return "dark"
+                                    case .automatic: return "system"
+                                    }
+                                },
+                                set: {
+                                    switch $0 {
+                                    case "light": coordinator.appearancePreference = .light
+                                    case "dark": coordinator.appearancePreference = .dark
+                                    default: coordinator.appearancePreference = .automatic
+                                    }
+                                }))),
             ACSettingsRow(title: "Launch at login", description: "Start AirCopy when you sign in",
                         control: .toggle(Binding(get: { settings.launchAtLogin },
                                                  set: { settings.launchAtLogin = $0 }))),
@@ -586,6 +609,6 @@ private struct CloseButton: View {
 // ACColor yet (the .05 row divider and the .07 rail border). Provide them here
 // without touching the shared token file.
 private extension ACColor {
-    static let border05 = Color(hex: 0x14141E, alpha: 0.05)
-    static let border07 = Color(hex: 0x14141E, alpha: 0.07)
+    static let border05 = dyn(light: 0x14141E, lightAlpha: 0.05, dark: 0xFFFFFF, darkAlpha: 0.05)
+    static let border07 = dyn(light: 0x14141E, lightAlpha: 0.07, dark: 0xFFFFFF, darkAlpha: 0.07)
 }
