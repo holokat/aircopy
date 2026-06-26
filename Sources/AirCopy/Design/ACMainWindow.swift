@@ -129,6 +129,8 @@ struct ACMainWindow: View {
     private var mainColumn: some View {
         VStack(spacing: 0) {
             toolbarRow1
+                // Lift row 1 (and its sort-popover overlay) above the rows below.
+                .zIndex(sortOpen ? 2 : 0)
             Divider().overlay(ACColor.border06)
             toolbarRow2
             Divider().overlay(ACColor.border06)
