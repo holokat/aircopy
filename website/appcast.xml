@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>AirCopy</title>
+    <link>https://aircopyapp.com/appcast.xml</link>
+    <item>
+      <title>Version 0.6.0</title>
+      <pubDate>Fri, 26 Jun 2026 16:36:50 +0900</pubDate>
+      <sparkle:version>9</sparkle:version>
+      <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://aircopyapp.com/downloads/AirCopy-macOS.zip" sparkle:edSignature="KjvETeQhWgtYmL1EpxJ9Rt8hZo1GgSNssXEsa2BXNOhOY4SCdS/dy8njgOTbEYgvD983bnDiMLd1shlmGVLMAQ==" length="2002390" type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
