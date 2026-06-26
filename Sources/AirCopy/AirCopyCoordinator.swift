@@ -36,6 +36,16 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
+    /// Watches the macOS screenshot folder so ⌘⇧4 / ⌘⇧3 screenshots (which save
+    /// to a file, never the clipboard) still sync.
+    @Published var syncScreenshotFiles = true {
+        didSet {
+            UserDefaults.standard.set(syncScreenshotFiles, forKey: Self.syncScreenshotFilesKey)
+            updateScreenshotWatcher()
+            statusText = syncScreenshotFiles ? "Screenshots will sync." : "Screenshot syncing is off."
+        }
+    }
+
     @Published var saveReceivedItemsToDiskEnabled = false {
         didSet {
             UserDefaults.standard.set(saveReceivedItemsToDiskEnabled, forKey: Self.saveReceivedItemsToDiskEnabledKey)
@@ -171,6 +181,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private var powerRunLoopSource: CFRunLoopSource?
     private var historyPersistTask: Task<Void, Never>?
+    private var screenshotWatcher: ScreenshotWatcher?
+    private var screenshotConsumerTask: Task<Void, Never>?
     private let hotkeyManager = GlobalHotkeyManager()
     @Published private(set) var hotkeyBindings: [String: HotkeyBinding] = [:]
     private var maxHistoryItems: Int { historyLimit }
@@ -216,6 +228,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     private static let appearancePreferenceKey = "appearance-preference"
     private static let imageSyncEnabledKey = "image-sync-enabled"
+    private static let syncScreenshotFilesKey = "sync-screenshot-files"
     private static let saveReceivedItemsToDiskEnabledKey = "save-received-items-to-disk-enabled"
     private static let saveReceivedImagesToDiskKey = "save-received-images-to-disk"
     private static let saveReceivedTextToDiskKey = "save-received-text-to-disk"
@@ -242,6 +255,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.deviceID = Self.loadOrCreateDeviceID()
         self.peerID = MCPeerID(displayName: Self.sanitizedPeerName(from: resolvedName))
         self.imageSyncEnabled = defaults.object(forKey: Self.imageSyncEnabledKey) as? Bool ?? true
+        self.syncScreenshotFiles = defaults.object(forKey: Self.syncScreenshotFilesKey) as? Bool ?? true
         self.saveReceivedItemsToDiskEnabled = defaults.object(forKey: Self.saveReceivedItemsToDiskEnabledKey) as? Bool ?? false
         self.saveReceivedImagesToDisk = defaults.object(forKey: Self.saveReceivedImagesToDiskKey) as? Bool ?? true
         self.saveReceivedTextToDisk = defaults.object(forKey: Self.saveReceivedTextToDiskKey) as? Bool ?? true
@@ -314,6 +328,10 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         clipboardTask?.cancel()
         clipboardTask = nil
+        screenshotConsumerTask?.cancel()
+        screenshotConsumerTask = nil
+        screenshotWatcher?.stop()
+        screenshotWatcher = nil
         connectivityHeartbeatTask?.cancel()
         connectivityHeartbeatTask = nil
         connectivityWatchdogTask?.cancel()
@@ -722,6 +740,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         startConnectivityHeartbeat()
         startConnectivityWatchdog()
         scheduleSyncExpirationTask()
+        updateScreenshotWatcher()
 
         statusText = syncEnabled
             ? (connectedPeerCount == 0 ? "Approve a nearby Mac or keep syncing locally." : "Ready.")
@@ -780,6 +799,72 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Screenshot folder sync
+
+    private func updateScreenshotWatcher() {
+        guard syncScreenshotFiles else {
+            screenshotConsumerTask?.cancel()
+            screenshotConsumerTask = nil
+            screenshotWatcher?.stop()
+            screenshotWatcher = nil
+            return
+        }
+        if screenshotWatcher == nil {
+            let watcher = ScreenshotWatcher()
+            screenshotWatcher = watcher
+            let stream = watcher.screenshots
+            screenshotConsumerTask = Task { [weak self] in
+                for await url in stream {
+                    self?.ingestScreenshotFile(url)
+                }
+            }
+        }
+        screenshotWatcher?.start()
+    }
+
+    /// Brings a screenshot saved to disk into the normal copy/sync flow: it
+    /// becomes the current clipboard and syncs to trusted Macs like a copy.
+    private func ingestScreenshotFile(_ url: URL) {
+        guard syncScreenshotFiles else { return }
+        guard let data = Self.pngImageData(fromFile: url) else { return }
+        let payload = ClipboardPayload(imageData: data, sourceAppName: "Screenshot")
+
+        guard payload != lastKnownPayload else { return }
+        lastKnownPayload = payload
+        writePayloadToPasteboard(payload)
+        let item = recordHistory(
+            payload: payload,
+            source: "Screenshot on this Mac",
+            senderName: localDeviceName,
+            date: Date()
+        )
+
+        if !imageSyncEnabled {
+            statusText = "Screenshot saved locally. Image sync is paused."
+            return
+        }
+        guard syncEnabled else {
+            statusText = "Screenshot saved locally. Sync is off."
+            return
+        }
+        guard !shouldSuppressSync(for: payload) else { return }
+        guard guardSensitivePayload(payload, action: .automaticSync) else { return }
+        sendPayload(payload, toDeviceIDs: autoSyncPeers.map(\.id), historyItemID: item.id)
+    }
+
+    /// Reads an image file at full resolution and returns PNG data (the format
+    /// the rest of the pipeline uses), converting from HEIC/JPEG losslessly.
+    private nonisolated static func pngImageData(fromFile url: URL) -> Data? {
+        guard let raw = try? Data(contentsOf: url) else { return nil }
+        if url.pathExtension.lowercased() == "png" { return raw }
+        guard let source = CGImageSourceCreateWithData(raw as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return raw
+        }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        return rep.representation(using: .png, properties: [:]) ?? raw
     }
 
     private func startConnectivityHeartbeat() {
@@ -1498,7 +1583,9 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         let fingerprint = item.fingerprint
 
         thumbnailTasksByFingerprint[fingerprint] = Task.detached(priority: .utility) { [sourceData] in
-            let thumbnail = ClipboardThumbnailFactory.thumbnailImage(from: sourceData, maxPixelSize: 160)
+            // Retina-friendly: cards display image areas at ~210pt (≈420px @2x);
+            // 160px upscaled looked blurry. 512 keeps cards crisp without bloat.
+            let thumbnail = ClipboardThumbnailFactory.thumbnailImage(from: sourceData, maxPixelSize: 512)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }

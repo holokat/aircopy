@@ -10,7 +10,7 @@ struct ACSendTarget: Identifiable {
 
 struct ACDetailPanel: View {
     let item: ClipboardHistoryItem
-    let thumbnail: NSImage?
+    let image: NSImage?
     let sendTargets: [ACSendTarget]
     let onClose: () -> Void
     let onCopy: () -> Void
@@ -77,8 +77,8 @@ struct ACDetailPanel: View {
                     .frame(height: 188)
                     .frame(maxWidth: .infinity)
                     .overlay {
-                        if let thumbnail {
-                            Image(nsImage: thumbnail).resizable().scaledToFill()
+                        if let image {
+                            Image(nsImage: image).interpolation(.high).resizable().scaledToFill()
                         } else {
                             LinearGradient(colors: [Color(hex: 0x2A3380), Color(hex: 0x6A3FB0)], startPoint: .topLeading, endPoint: .bottomTrailing)
                         }

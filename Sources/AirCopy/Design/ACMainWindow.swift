@@ -111,7 +111,7 @@ struct ACMainWindow: View {
             if let item = selectedItem {
                 ACDetailPanel(
                     item: item,
-                    thumbnail: thumbnail(for: item),
+                    image: item.image ?? thumbnail(for: item),
                     sendTargets: sendTargets(for: item),
                     onClose: { selectedID = nil },
                     onCopy: { copy(item) },

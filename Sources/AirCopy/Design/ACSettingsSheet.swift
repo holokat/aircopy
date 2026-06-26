@@ -218,6 +218,9 @@ struct ACSettingsSheet: View {
             ACSettingsRow(title: "Include images", description: "Sync screenshots and copied images",
                         control: .toggle(Binding(get: { coordinator.imageSyncEnabled },
                                                  set: { coordinator.imageSyncEnabled = $0 }))),
+            ACSettingsRow(title: "Sync screenshots", description: "Auto-sync screenshots saved to your screenshot folder",
+                        control: .toggle(Binding(get: { coordinator.syncScreenshotFiles },
+                                                 set: { coordinator.syncScreenshotFiles = $0 }))),
             ACSettingsRow(title: "Max image size", description: "Skip images larger than this",
                         control: .segmented(
                             options: [
