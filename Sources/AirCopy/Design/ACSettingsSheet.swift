@@ -281,6 +281,9 @@ struct ACSettingsSheet: View {
                         control: .button(label: "Check", danger: false) {
                             updater.checkForUpdates()
                         }),
+            ACSettingsRow(title: "Automatic updates", description: "Check for new versions in the background",
+                        control: .toggle(Binding(get: { updater.automaticallyChecksForUpdates },
+                                                 set: { updater.automaticallyChecksForUpdates = $0 }))),
             ACSettingsRow(title: "Reset settings", description: "Restore everything to defaults",
                         control: .button(label: "Reset", danger: true) {
                             coordinator.resetAllSettings()

@@ -11,14 +11,21 @@ final class SparkleUpdater: ObservableObject {
     private let controller: SPUStandardUpdaterController
     @Published private(set) var canCheckForUpdates = false
 
+    /// Whether Sparkle checks for new versions automatically in the background.
+    @Published var automaticallyChecksForUpdates: Bool {
+        didSet { controller.updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates }
+    }
+
     init() {
         // startingUpdater: true kicks off Sparkle immediately (scheduled checks
         // use SUEnableAutomaticChecks / SUFeedURL / SUPublicEDKey from Info.plist).
-        controller = SPUStandardUpdaterController(
+        let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        self.controller = controller
+        self.automaticallyChecksForUpdates = controller.updater.automaticallyChecksForUpdates
         controller.updater.publisher(for: \.canCheckForUpdates)
             .receive(on: RunLoop.main)
             .assign(to: &$canCheckForUpdates)
