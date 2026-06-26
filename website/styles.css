@@ -58,3 +58,23 @@ a{color:inherit;text-decoration:none}
 
 .privacy-readlink{transition:color .2s;color:#0A6CFF;font-weight:500}
 .privacy-readlink:hover{color:#0a4fbf}
+
+/* ============ responsive ============ */
+@media (max-width: 900px) {
+  /* stack every multi-column layout grid */
+  [style*="grid-template-columns"]{grid-template-columns:1fr !important;gap:34px !important}
+  /* the demo's connecting line/packet only makes sense side-by-side */
+  #demoSvg{display:none !important}
+  #demoStage{margin-top:26px !important}
+  /* trim oversized vertical rhythm */
+  section{padding-top:66px !important;padding-bottom:66px !important}
+  section:first-of-type{padding-top:118px !important} /* hero clears the fixed nav */
+}
+
+@media (max-width: 600px) {
+  nav{padding:0 14px !important}
+  .nav-links{display:none !important}            /* keep logo + Download on phones */
+  section{padding-left:18px !important;padding-right:18px !important}
+  .dl-card-inner{padding:52px 24px !important}   /* download card breathing room */
+  .footer-links{gap:18px !important;row-gap:10px !important}
+}
