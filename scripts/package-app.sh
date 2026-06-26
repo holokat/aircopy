@@ -225,6 +225,46 @@ else
   echo "Skipping appcast (need Sparkle sign_update + key file at $SPARKLE_KEY_FILE)." >&2
 fi
 
+# Build a drag-to-Applications DMG (the website download). create-dmg sets the
+# Finder background/layout via Finder itself, so it works across macOS versions.
+DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
+DMG_BG="$ROOT_DIR/Resources/dmg/background.png"
+if command -v create-dmg >/dev/null 2>&1 && [[ -f "$DMG_BG" ]]; then
+  echo "Building DMG..."
+  rm -f "$DMG_PATH"
+  DMG_SRC="$(mktemp -d)"
+  ditto "$APP_DIR" "$DMG_SRC/$APP_NAME.app"
+  create-dmg \
+    --volname "$APP_NAME Installer" \
+    --background "$DMG_BG" \
+    --window-pos 200 200 --window-size 640 420 \
+    --icon-size 100 \
+    --icon "$APP_NAME.app" 160 190 \
+    --app-drop-link 480 190 \
+    --no-internet-enable \
+    "$DMG_PATH" "$DMG_SRC" || true
+  rm -rf "$DMG_SRC"
+
+  if [[ -f "$DMG_PATH" && "$SIGN_IS_DEVELOPER_ID" == "1" ]]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+    if command -v xcrun >/dev/null 2>&1 && xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+      echo "Notarizing DMG…"
+      if xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait; then
+        xcrun stapler staple "$DMG_PATH"
+        echo "DMG notarized and stapled."
+      else
+        echo "WARNING: DMG notarization failed." >&2
+      fi
+    fi
+  fi
+  if [[ -f "$DMG_PATH" ]]; then
+    cp "$DMG_PATH" "$WEBSITE_DOWNLOADS_DIR/$APP_NAME.dmg"
+    echo "  $WEBSITE_DOWNLOADS_DIR/$APP_NAME.dmg"
+  fi
+else
+  echo "Skipping DMG (need create-dmg + $DMG_BG)."
+fi
+
 if [[ "$KEEP_STAGING_APP" != "1" ]]; then
   echo "Removing staging app bundle from dist..."
   rm -rf "$APP_DIR"

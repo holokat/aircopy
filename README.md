@@ -12,18 +12,17 @@ AirCopy lets you copy on one Mac and paste on another.
 
 AirCopy syncs text, images, and recent clipboard history between nearby Macs you control.
 
-## App Store subscription
+It's **free and open source** — no accounts, no subscriptions, no cloud. Sync happens directly between your Macs over the local network.
 
-AirCopy uses StoreKit auto-renewable subscriptions for App Store distribution. Create a monthly subscription product in App Store Connect with this product ID:
+## Download
 
-```text
-dev.aircopy.app.pro.monthly
-```
+Get the latest signed & notarized build from [aircopyapp.com](https://aircopyapp.com), or from the [Releases](https://github.com/holokat/aircopy/releases) page. Requires macOS 14 or later. After the first install, AirCopy updates itself.
 
-Set the subscription price to $9.99/month and add a 7-day free trial introductory offer in App Store Connect. The app grants sync access while StoreKit reports an active entitlement for that product.
+## Building
 
-For team billing in the Mac App Store build, keep StoreKit as the unlock path. A direct-download edition can use Stripe Billing later for seat-based invoices, admin-managed teams, SSO, and cross-platform licensing, but that should be a separate distribution path so the App Store app remains review-friendly.
+AirCopy is a Swift Package. Build and run with `swift build` / `swift run`, or produce a packaged `.app` and `.dmg` with `./scripts/package-app.sh`.
 
 ## License
 
 MIT
+
