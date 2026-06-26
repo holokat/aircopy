@@ -59,15 +59,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         }
     }
 
-    @Published var requireIncomingClipboardApproval = false {
-        didSet {
-            UserDefaults.standard.set(requireIncomingClipboardApproval, forKey: Self.requireIncomingClipboardApprovalKey)
-            statusText = requireIncomingClipboardApproval
-                ? "Incoming team clips will wait in the inbox."
-                : "Incoming clips will update this clipboard automatically."
-        }
-    }
-
     @Published var applyAppPoliciesToIncomingItems = true {
         didSet {
             UserDefaults.standard.set(applyAppPoliciesToIncomingItems, forKey: Self.applyAppPoliciesToIncomingItemsKey)
@@ -106,7 +97,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     @Published private(set) var effectiveColorScheme: ColorScheme?
     @Published private(set) var appIconImage: NSImage?
     @Published private(set) var imageThumbnailByFingerprint: [String: NSImage] = [:]
-    @Published private(set) var incomingClipboardItems: [IncomingClipboardItem] = []
     @Published private(set) var protectedPasswordManagerApplications: [ProtectedAppRule] = AppSourcePrivacyPolicy.protectedPasswordManagerApplications
     @Published private(set) var savedItemsBaseDirectoryPath: String
     @Published private(set) var temporarySyncUntil: Date? {
@@ -226,7 +216,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     private static let favoriteFingerprintsKey = "favorite-fingerprints"
     private static let excludedAppsKey = "excluded-app-map"
     private static let requireDeviceApprovalKey = "require-device-approval"
-    private static let requireIncomingClipboardApprovalKey = "require-incoming-clipboard-approval"
     private static let applyAppPoliciesToIncomingItemsKey = "apply-app-policies-to-incoming-items"
     private static let blockPasswordManagerClipsKey = "block-password-manager-clips"
 
@@ -250,7 +239,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         self.savedItemsBaseDirectoryPath = defaults.string(forKey: Self.savedItemsBaseDirectoryPathKey)
             ?? ReceivedItemDiskStore.defaultBaseDirectory.path
         self.requireDeviceApproval = defaults.object(forKey: Self.requireDeviceApprovalKey) as? Bool ?? true
-        self.requireIncomingClipboardApproval = defaults.object(forKey: Self.requireIncomingClipboardApprovalKey) as? Bool ?? false
         self.applyAppPoliciesToIncomingItems = defaults.object(forKey: Self.applyAppPoliciesToIncomingItemsKey) as? Bool ?? true
         self.blockPasswordManagerClips = defaults.object(forKey: Self.blockPasswordManagerClipsKey) as? Bool ?? true
         self.temporarySyncUntil = defaults.object(forKey: Self.temporarySyncUntilKey) as? Date
@@ -420,36 +408,6 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
     func filteredHistory(searchText: String, filter: HistoryFilter) -> [ClipboardHistoryItem] {
         ClipboardHistoryStore.filtered(clipboardHistory, searchText: searchText, filter: filter)
-    }
-
-    func acceptIncomingClipboardItem(_ item: IncomingClipboardItem) {
-        acceptIncomingClipboardItem(id: item.id)
-    }
-
-    func acceptIncomingClipboardItem(id: UUID) {
-        guard let item = incomingClipboardItems.first(where: { $0.id == id }) else {
-            statusText = "That inbox item is no longer available."
-            return
-        }
-        guard guardSensitivePayload(item.payload, action: .acceptIncoming) else { return }
-
-        applyIncomingClipboardItem(item, statusPrefix: "Copied")
-    }
-
-    func rejectIncomingClipboardItem(_ item: IncomingClipboardItem) {
-        guard incomingClipboardItems.contains(where: { $0.id == item.id }) else { return }
-
-        incomingClipboardItems.removeAll { $0.id == item.id }
-        sendReceipt(.skipped, for: item.message, toDeviceID: item.senderID)
-        statusText = "Rejected clip from \(item.senderName)."
-    }
-
-    func clearIncomingClipboardItems() {
-        let originalCount = incomingClipboardItems.count
-        incomingClipboardItems.removeAll()
-        statusText = originalCount == 0
-            ? "Inbox is already empty."
-            : "Cleared \(originalCount) inbox item\(originalCount == 1 ? "" : "s")."
     }
 
     func restoreHistoryItem(_ item: ClipboardHistoryItem) {
@@ -1204,39 +1162,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
 
         noteConnectivityEvent()
 
-        if requireIncomingClipboardApproval {
-            enqueueIncomingClipboard(message)
-            sendReceipt(.delivered, for: message, to: peer)
-            statusText = "New \(message.payload.kind.title.lowercased()) from \(message.senderName) is waiting in the inbox."
-        } else {
-            applyIncomingClipboardMessage(message)
-            sendReceipt(.clipboardUpdated, for: message, to: peer)
-        }
-    }
-
-    private func enqueueIncomingClipboard(_ message: ClipboardMessage) {
-        if let index = incomingClipboardItems.firstIndex(where: { $0.id == message.id }) {
-            incomingClipboardItems[index].state = .pending
-        } else {
-            incomingClipboardItems.insert(
-                IncomingClipboardItem(message: message, receivedAt: Date(), state: .pending),
-                at: 0
-            )
-        }
-
-        if incomingClipboardItems.count > 48 {
-            incomingClipboardItems = Array(incomingClipboardItems.prefix(48))
-        }
-    }
-
-    private func applyIncomingClipboardItem(_ item: IncomingClipboardItem, statusPrefix: String) {
-        applyIncomingClipboardMessage(item.message, statusPrefix: statusPrefix)
-
-        if let index = incomingClipboardItems.firstIndex(where: { $0.id == item.id }) {
-            incomingClipboardItems[index].state = .accepted
-        }
-
-        sendReceipt(.clipboardUpdated, for: item.message, toDeviceID: item.senderID)
+        applyIncomingClipboardMessage(message)
+        sendReceipt(.clipboardUpdated, for: message, to: peer)
     }
 
     private func applyIncomingClipboardMessage(_ message: ClipboardMessage, statusPrefix: String = "Clipboard updated") {
