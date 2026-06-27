@@ -23,9 +23,13 @@ private let spotlightFilters: [ClipTypeFilter] = [.all, .text, .link, .image, .c
 
 @MainActor
 final class SpotlightModel: ObservableObject {
-    @Published var query = "" { didSet { selectedIndex = 0 } }
-    @Published var typeFilter: ClipTypeFilter = .all { didSet { selectedIndex = 0 } }
-    @Published var selectedIndex = 0
+    @Published var query = "" { didSet { refresh() } }
+    @Published var typeFilter: ClipTypeFilter = .all { didSet { refresh() } }
+    @Published private(set) var selectedIndex = 0
+
+    // Cached, so each keystroke does one filter pass — not several per render.
+    @Published private(set) var results: [ClipboardHistoryItem] = []
+    @Published private(set) var counts: [ClipTypeFilter: Int] = [:]
 
     weak var coordinator: AirCopyCoordinator?
     var onClose: (() -> Void)?
@@ -34,30 +38,44 @@ final class SpotlightModel: ObservableObject {
         query = ""
         typeFilter = .all
         selectedIndex = 0
+        refresh()
     }
 
-    func results() -> [ClipboardHistoryItem] {
-        guard let coordinator else { return [] }
+    /// Recompute the filtered results and per-type counts in a single pass.
+    func refresh() {
+        guard let coordinator else { results = []; counts = [:]; return }
+        let history = coordinator.clipboardHistory
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return coordinator.clipboardHistory.filter { item in
+
+        var newCounts: [ClipTypeFilter: Int] = [.all: history.count]
+        for item in history {
+            switch item.cardKind {
+            case .text: newCounts[.text, default: 0] += 1
+            case .link: newCounts[.link, default: 0] += 1
+            case .image: newCounts[.image, default: 0] += 1
+            case .color: newCounts[.color, default: 0] += 1
+            }
+        }
+        counts = newCounts
+
+        results = history.filter { item in
             guard typeFilter.matches(item.cardKind) else { return false }
             if q.isEmpty { return true }
             return (item.payload.searchableText + " " + item.senderName).lowercased().contains(q)
         }
+        if selectedIndex >= results.count { selectedIndex = max(results.count - 1, 0) }
     }
 
-    func count(for filter: ClipTypeFilter) -> Int {
-        guard let coordinator else { return 0 }
-        return coordinator.clipboardHistory.filter { filter.matches($0.cardKind) }.count
-    }
+    func count(for filter: ClipTypeFilter) -> Int { counts[filter] ?? 0 }
 
     func selected() -> ClipboardHistoryItem? {
-        let r = results()
-        return r.indices.contains(selectedIndex) ? r[selectedIndex] : nil
+        results.indices.contains(selectedIndex) ? results[selectedIndex] : nil
     }
 
+    func select(_ index: Int) { selectedIndex = index }
+
     // Keyboard actions (driven by the panel's key monitor).
-    func moveDown() { selectedIndex = min(selectedIndex + 1, max(results().count - 1, 0)) }
+    func moveDown() { selectedIndex = min(selectedIndex + 1, max(results.count - 1, 0)) }
     func moveUp() { selectedIndex = max(selectedIndex - 1, 0) }
 
     func copySelected() {
@@ -73,10 +91,9 @@ final class SpotlightModel: ObservableObject {
 
     /// ⌘1…⌘9 quick copy of the Nth visible result (1-based).
     func quickCopy(_ number: Int) {
-        let r = results()
         let idx = number - 1
-        guard r.indices.contains(idx) else { return }
-        coordinator?.restoreHistoryItem(r[idx])
+        guard results.indices.contains(idx) else { return }
+        coordinator?.restoreHistoryItem(results[idx])
         onClose?()
     }
 
@@ -92,7 +109,7 @@ struct ACSpotlightView: View {
     @EnvironmentObject private var coordinator: AirCopyCoordinator
     @FocusState private var searchFocused: Bool
 
-    private var items: [ClipboardHistoryItem] { model.results() }
+    private var items: [ClipboardHistoryItem] { model.results }
     private var trustedPeers: [PeerDeviceState] {
         coordinator.peerDevices.filter { $0.trustState == .trusted }
     }
@@ -126,7 +143,8 @@ struct ACSpotlightView: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .strokeBorder(SP.border, lineWidth: 1)
         )
-        .onAppear { searchFocused = true }
+        .onAppear { searchFocused = true; model.refresh() }
+        .onChange(of: coordinator.clipboardHistory.count) { _, _ in model.refresh() }
     }
 
     // MARK: Search bar
@@ -180,17 +198,17 @@ struct ACSpotlightView: View {
     private var resultsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(spacing: 2) {
+                LazyVStack(spacing: 2) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         resultRow(item, index: index)
                             .id(index)
-                            .onTapGesture { model.selectedIndex = index }
+                            .onTapGesture { model.select(index) }
                     }
                 }
                 .padding(8)
             }
             .onChange(of: model.selectedIndex) { _, idx in
-                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(idx, anchor: .center) }
+                withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(idx, anchor: .center) }
             }
         }
         .frame(maxWidth: .infinity)
@@ -234,7 +252,9 @@ struct ACSpotlightView: View {
                 .frame(width: 30, height: 30)
         case .image:
             Group {
-                if let img = coordinator.imageThumbnail(for: item) ?? item.image {
+                // Use the cached thumbnail only — never decode the full-res image
+                // for a 30px row icon (that's what made the list stutter).
+                if let img = coordinator.imageThumbnail(for: item) {
                     Image(nsImage: img).resizable().scaledToFill()
                 } else {
                     LinearGradient(colors: [Color(hex: 0x2A3380), Color(hex: 0x6A3FB0)], startPoint: .topLeading, endPoint: .bottomTrailing)
