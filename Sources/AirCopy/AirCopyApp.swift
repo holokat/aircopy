@@ -8,6 +8,7 @@ struct AirCopyApp: App {
     @StateObject private var settingsStore = AppSettingsStore()
     @StateObject private var toastCenter = ACToastCenter()
     @StateObject private var updater = SparkleUpdater()
+    @StateObject private var spotlight = ACSpotlightController()
 
     var body: some Scene {
         WindowGroup {
@@ -22,6 +23,11 @@ struct AirCopyApp: App {
                     StatusItemInstallerView()
                         .environmentObject(coordinator)
                         .environmentObject(statusItemController)
+                )
+                .background(
+                    SpotlightInstallerView()
+                        .environmentObject(coordinator)
+                        .environmentObject(spotlight)
                 )
                 .task {
                     settingsStore.onMenuBarChange = { [weak statusItemController] visible in
@@ -51,6 +57,22 @@ private struct StatusItemInstallerView: View {
             .frame(width: 0, height: 0)
             .onAppear {
                 statusItemController.install(coordinator: coordinator)
+            }
+    }
+}
+
+private struct SpotlightInstallerView: View {
+    @EnvironmentObject private var coordinator: AirCopyCoordinator
+    @EnvironmentObject private var spotlight: ACSpotlightController
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                spotlight.install(coordinator: coordinator)
+            }
+            .onChange(of: coordinator.spotlightPresented) { _, presented in
+                spotlight.setVisible(presented)
             }
     }
 }

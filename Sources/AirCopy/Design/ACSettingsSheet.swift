@@ -256,6 +256,8 @@ struct ACSettingsSheet: View {
 
     private var shortcutRows: [ACSettingsRow] {
         [
+            ACSettingsRow(title: "AirCopy Spotlight", description: "Quick clipboard search overlay",
+                        control: .shortcut(hotkeyBinding(for: "spotlight"))),
             ACSettingsRow(title: "Open AirCopy", description: "Bring the window forward",
                         control: .shortcut(hotkeyBinding(for: "open"))),
             ACSettingsRow(title: "Copy & sync", description: "Copy selection and push it",

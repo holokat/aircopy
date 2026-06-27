@@ -88,6 +88,8 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
     }
 
     @Published var settingsPresented = false
+    /// Drives the Spotlight-style quick-search overlay (toggled by its hotkey).
+    @Published var spotlightPresented = false
 
     @Published var appearancePreference: AppearancePreference {
         didSet {
@@ -694,6 +696,15 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
             window.orderFrontRegardless()
             window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    /// Toggle the Spotlight overlay. The AppKit panel observes this flag.
+    func toggleSpotlight() {
+        spotlightPresented.toggle()
+    }
+
+    func dismissSpotlight() {
+        spotlightPresented = false
     }
 
     func showSettings() {
@@ -1904,6 +1915,7 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         hotkeyManager.register(id: id, binding: binding) { [weak self] in
             guard let self else { return }
             switch id {
+            case "spotlight": self.toggleSpotlight()
             case "open": self.showMainWindow()
             case "copySync": self.sendCurrentClipboardToAllDevices()
             case "pasteLast": self.pasteLatestClip()

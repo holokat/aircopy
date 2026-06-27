@@ -141,10 +141,11 @@ struct HotkeyBinding: Equatable, Codable {
 
     // MARK: Defaults
 
-    /// Default bindings keyed by action id: ⌘⇧V, ⌘⇧C, ⌘⇧B.
+    /// Default bindings keyed by action id. Spotlight defaults to ⌥Space.
     static func defaultBindings() -> [String: HotkeyBinding] {
         let shiftCmd = UInt32(cmdKey) | UInt32(shiftKey)
         return [
+            "spotlight": HotkeyBinding(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)),
             "open":      HotkeyBinding(keyCode: UInt32(kVK_ANSI_V), modifiers: shiftCmd),
             "copySync":  HotkeyBinding(keyCode: UInt32(kVK_ANSI_C), modifiers: shiftCmd),
             "pasteLast": HotkeyBinding(keyCode: UInt32(kVK_ANSI_B), modifiers: shiftCmd),
