@@ -4,12 +4,12 @@
     <title>AirCopy</title>
     <link>https://aircopyapp.com/appcast.xml</link>
     <item>
-      <title>Version 0.7.1</title>
-      <pubDate>Sat, 27 Jun 2026 23:00:56 +0900</pubDate>
-      <sparkle:version>12</sparkle:version>
-      <sparkle:shortVersionString>0.7.1</sparkle:shortVersionString>
+      <title>Version 0.7.2</title>
+      <pubDate>Sat, 27 Jun 2026 23:11:26 +0900</pubDate>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>0.7.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://aircopyapp.com/downloads/AirCopy-macOS.zip" sparkle:edSignature="KaBAeObhAVW1eqR9B7QIeLenber5sR5ilIvkVwiqEHldxywkLCZnSaszFTWxF7J7byY1QLcWhd0DLmXVIResAA==" length="2106670" type="application/octet-stream"/>
+      <enclosure url="https://aircopyapp.com/downloads/AirCopy-macOS.zip" sparkle:edSignature="M+lPPhYd1CdbTG6QThXK5qYSomSxll2Djg364M3PdIlJ72h/XfSxjs8efBlYoLfBNonAO+bhsuWT81Qhjvs2Aw==" length="2113298" type="application/octet-stream"/>
     </item>
   </channel>
 </rss>
