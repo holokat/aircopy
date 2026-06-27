@@ -253,11 +253,15 @@ struct ACSpotlightView: View {
         case .image:
             Group {
                 // Use the cached thumbnail only — never decode the full-res image
-                // for a 30px row icon (that's what made the list stutter).
+                // for a 30px row icon (that's what made the list stutter). If it's
+                // not cached yet, kick off generation on appear and show a
+                // placeholder until it lands.
                 if let img = coordinator.imageThumbnail(for: item) {
                     Image(nsImage: img).resizable().scaledToFill()
                 } else {
                     LinearGradient(colors: [Color(hex: 0x2A3380), Color(hex: 0x6A3FB0)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        .overlay(ProgressView().controlSize(.small).tint(.white.opacity(0.6)))
+                        .task { coordinator.ensureThumbnail(for: item) }
                 }
             }
             .frame(width: 30, height: 30)

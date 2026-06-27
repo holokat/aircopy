@@ -370,6 +370,12 @@ final class AirCopyCoordinator: NSObject, ObservableObject {
         imageThumbnailByFingerprint[item.fingerprint]
     }
 
+    /// Generate the cached thumbnail for an image item if it's missing (used by
+    /// Spotlight to lazy-load row thumbnails as they scroll into view).
+    func ensureThumbnail(for item: ClipboardHistoryItem) {
+        scheduleThumbnailGenerationIfNeeded(for: item)
+    }
+
     var latestImageItem: ClipboardHistoryItem? {
         clipboardHistory.first(where: { $0.kind == .image })
     }
